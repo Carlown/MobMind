@@ -1,0 +1,43 @@
+# Gradle
+.gradle/
+build/
+out/
+classes/
+*.iml
+*.ipr
+*.iws
+.idea/
+*.class
+*.log
+
+# Eclipse
+.classpath
+.project
+.settings/
+
+# VS Code
+.vscode/
+bin/
+
+# Minecraft run directory
+run/
+*.launch
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local secrets/tokens
+.github_token
+
+# Gradle wrapper jar is usually committed, but keep local-only files
+local.properties
+.gradletasknamecache
+gradle-app.setting
+
+# Local runtime voice engine / models (large, user-specific)
+mobmind-voice/
+mobmind-voice.zip
+
+# Local run logs
+run-client-log.txt

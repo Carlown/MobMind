@@ -1,0 +1,16 @@
+{
+  "required": true,
+  "package": "com.mobmind.mixin",
+  "mixins": [
+    "MobMixin",
+    "LivingEntityMixin",
+    "ZombieVillagerMixin",
+    "PiglinMixin",
+    "PiglinAiMixin",
+    "EndCrystalMixin",
+    "EnderDragonFightMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
