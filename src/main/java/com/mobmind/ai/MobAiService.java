@@ -67,8 +67,10 @@ public final class MobAiService {
 		// 优先对最近的 1-3 只生物回应，防止刷屏
 		nearby.sort(java.util.Comparator.comparingDouble(m -> m.distanceToSqr(player)));
 		int count = Math.min(3, nearby.size());
-		String langHint = isEnglish(text) ? "请用英文回复。" : "";
-		String heard = "（你听到玩家" + player.getGameProfile().name() + "说：\"" + text + "\"，你在附近，按你的性格回应一句。" + langHint + "）";
+		String langHint = isEnglish(text) ? t("请用英文回复。", "Please reply in English.") : "";
+		String heard = isEnglishUi()
+				? "(You hear player " + player.getGameProfile().name() + " say: \"" + text + "\". You are nearby. Respond in character. " + langHint + ")"
+				: "（你听到玩家" + player.getGameProfile().name() + "说：\"" + text + "\"，你在附近，按你的性格回应一句。" + langHint + "）";
 		for (int i = 0; i < count; i++) {
 			Mob mob = nearby.get(i);
 			long now = System.currentTimeMillis();
@@ -91,7 +93,7 @@ public final class MobAiService {
 		return totalLetters > 0 && (double) asciiLetters / totalLetters > 0.65;
 	}
 
-	/** 判断当前游戏界面语言是否为英文（用于决定显示名格式） */
+	/** 判断当前游戏界面语言是否为英文（用于决定显示名格式与 AI 回复语言） */
 	private static boolean isEnglishUi() {
 		try {
 			String title = net.minecraft.locale.Language.getInstance().getOrDefault("gui.mobmind.config.title", "");
@@ -99,6 +101,11 @@ public final class MobAiService {
 		} catch (Exception e) {
 			return false;
 		}
+	}
+
+	/** 根据当前界面语言返回中英双语字符串之一 */
+	private static String t(String zh, String en) {
+		return isEnglishUi() ? en : zh;
 	}
 
 	/** 判断生物是否在可对话范围内；飞行/空中生物额外放宽垂直距离，末影龙使用大范围水平距离 */
@@ -146,16 +153,19 @@ public final class MobAiService {
 			int friendship = MobMindState.friendship(mob, player.getUUID());
 			int chance = 20 + friendship / 2 + p.sociability / 4;
 			if (mob.getRandom().nextInt(100) < chance) {
-				text += "（你内心决定跟他去看看，回复的 action 必须是 follow）";
+				text += t("（你内心决定跟他去看看，回复的 action 必须是 follow）",
+						"(You decide to follow him and look around; action must be follow)");
 			} else {
-				text += "（你内心不打算跟他去，用符合你性格的方式婉拒，action 为 none）";
+				text += t("（你内心不打算跟他去，用符合你性格的方式婉拒，action 为 none）",
+						"(You don't plan to follow; politely refuse in your own style; action is none)");
 			}
 		}
 		// 视觉：玩家展示建筑求点评，扫描四周人工方块生成所见描述
 		if (SHOW_INTENT.matcher(text).find()) {
-			String seen = EnvironmentSense.scanBuild(player);
-			text += "（你环顾四周，看到：" + seen
-					+ "。请根据你的性格、审美和立场点评它，可以真诚夸赞也可以毒舌吐槽）";
+			String seen = EnvironmentSense.scanBuild(player, isEnglishUi());
+			text += isEnglishUi()
+					? "(You look around and see: " + seen + ". Comment on it according to your personality, taste and stance; praise or roast as you like)"
+					: "（你环顾四周，看到：" + seen + "。请根据你的性格、审美和立场点评它，可以真诚夸赞也可以毒舌吐槽）";
 			if (SHOW_ALL.matcher(rawText).find()) {
 				notifyCrowdOpinion(player, mob, seen);
 			}
@@ -168,12 +178,13 @@ public final class MobAiService {
 			MobMindState.Order order = MobMindState.orderFor(mob, mob.level().getLevelData().getGameTime());
 			if (order != null && order.type() == MobMindState.OrderType.FOLLOW && order.playerId().equals(player.getUUID())) {
 				MobMindState.clearOrder(mob);
-				text += "（玩家让你别再跟着他，你决定停下。回复用你自己的风格说一声，action 为 none）";
+				text += t("（玩家让你别再跟着他，你决定停下。回复用你自己的风格说一声，action 为 none）",
+						"(The player told you to stop following; you decide to stay. Respond in your own style; action is none)");
 			}
 		}
 
 		if (isEnglish(text)) {
-			text += "（请用英文回复）";
+			text += t("（请用英文回复）", "(Please reply in English)");
 		}
 		respond(player, mob, text, true);
 	}
@@ -185,23 +196,24 @@ public final class MobAiService {
 				m -> m.isAlive() && m != speaker && PersonaRegistry.supports(m) && withinTalkRange(m, player));
 		int limit = Math.min(3, crowd.size());
 		for (int i = 0; i < limit; i++) {
-			respond(player, crowd.get(i), "（玩家" + player.getGameProfile().name()
-					+ "向大家展示他建的东西。你凑过去看到：" + seen + "。按你的性格点评一句）", false);
+			respond(player, crowd.get(i), isEnglishUi()
+					? "(Player " + player.getGameProfile().name() + " is showing everyone what they built. You look over and see: " + seen + ". Comment in character)"
+					: "（玩家" + player.getGameProfile().name() + "向大家展示他建的东西。你凑过去看到：" + seen + "。按你的性格点评一句）", false);
 		}
 	}
 
-	/** 跟随邀请话术 */
+	/** 跟随邀请话术（中英） */
 	private static final java.util.regex.Pattern FOLLOW_INVITE = java.util.regex.Pattern
-			.compile("(跟我来|跟我走|跟着我|跟我去|跟我过|一起来|一起走|带你去|带你看|带你去看|过来看看|来看一下|来这边|陪我去|陪我走|陪我看看)");
-	/** 展示作品求点评话术 */
+			.compile("(跟我来|跟我走|跟着我|跟我去|跟我过|一起来|一起走|带你去|带你看|带你去看|过来看看|来看一下|来这边|陪我去|陪我走|陪我看看|follow me|come with me|come here|let's go|go with me)");
+	/** 展示作品求点评话术（中英） */
 	private static final java.util.regex.Pattern SHOW_INTENT = java.util.regex.Pattern
-			.compile("(看我[建盖造搭做]的|看看我[建盖造搭做]的|我[建盖造搭做]了|给大家看看|给大家看|点评一下|评价一下|看看这个|欣赏一下|我的作品|我的建筑|好看吗|漂亮吗)");
-	/** 向围观群众展示 */
+			.compile("(看我[建盖造搭做]的|看看我[建盖造搭做]的|我[建盖造搭做]了|给大家看看|给大家看|点评一下|评价一下|看看这个|欣赏一下|我的作品|我的建筑|好看吗|漂亮吗|look at what i built|check out my build|rate my build|what do you think of my)");
+	/** 向围观群众展示（中英） */
 	private static final java.util.regex.Pattern SHOW_ALL = java.util.regex.Pattern
-			.compile("(大家|所有人|大伙|各位)");
-	/** 主动解除跟随话术 */
+			.compile("(大家|所有人|大伙|各位|everyone|everybody|all of you|guys)");
+	/** 主动解除跟随话术（中英） */
 	private static final java.util.regex.Pattern UNFOLLOW = java.util.regex.Pattern
-			.compile("(别跟|不要跟|不用跟|不跟了|别跟着我|别跟过来|走开|你回去|待着别动|停下|不用你|散了吧|自己去玩)");
+			.compile("(别跟|不要跟|不用跟|不跟了|别跟着我|别跟过来|走开|你回去|待着别动|停下|不用你|散了吧|自己去玩|stop following|don't follow|go away|stay here|wait here)");
 
 	// ---------- 入口：生物被打反应 ----------
 
@@ -216,7 +228,7 @@ public final class MobAiService {
 		long gameTime = mob.level().getLevelData().getGameTime();
 		MobMindState.clearCalm(mob, player.getUUID()); // 动手即撕毁和解
 		MobMindState.provoke(mob, player.getUUID(), gameTime + 6000); // 激怒5分钟，允许还手
-		respond(player, mob, "（你突然攻击了它）", true);
+		respond(player, mob, t("（你突然攻击了它）", "(The player suddenly attacked you)"), true);
 	}
 
 	// ---------- 入口：熟人生物被其他人/怪物攻击，向高好感玩家求救 ----------
@@ -251,8 +263,9 @@ public final class MobAiService {
 		String attackerName = attacker instanceof net.minecraft.world.entity.player.Player
 				? attacker.getDisplayName().getString()
 				: attacker.getType().getDescription().getString();
-		respond(bestSp, mob, "（你正被" + attackerName + "攻击，情况危急！向" + bestSp.getGameProfile().name()
-				+ "求救，请求他快来保护你。你可以惊慌、愤怒或逞强，但要明确呼救）", false);
+		respond(bestSp, mob, isEnglishUi()
+				? "(You are being attacked by " + attackerName + ", the situation is dire! Cry for help to " + bestSp.getGameProfile().name() + " and ask him to come protect you quickly. You can be panicked, angry or defiant, but make the call for help clear)"
+				: "（你正被" + attackerName + "攻击，情况危急！向" + bestSp.getGameProfile().name() + "求救，请求他快来保护你。你可以惊慌、愤怒或逞强，但要明确呼救）", false);
 	}
 
 	// ---------- 入口：村民被怪物追逐（还没被打到）就向高好感玩家求救 ----------
@@ -286,8 +299,9 @@ public final class MobAiService {
 		LAST_VILLAGER_CHASE_CRY.put(villager.getUUID(), gameTime);
 
 		String attackerName = attacker.getType().getDescription().getString();
-		respond(bestSp, villager, "（" + attackerName + "正在追你，你跑得很快但它还在后面！向"
-				+ bestSp.getGameProfile().name() + "求救，让他快来保护你）", false);
+		respond(bestSp, villager, isEnglishUi()
+				? "(" + attackerName + " is chasing you; you are running fast but it's still behind! Cry for help to " + bestSp.getGameProfile().name() + " and ask him to come protect you)"
+				: "（" + attackerName + "正在追你，你跑得很快但它还在后面！向" + bestSp.getGameProfile().name() + "求救，让他快来保护你）", false);
 	}
 
 	// ---------- 入口：被玩家施加药水效果 ----------
@@ -302,8 +316,12 @@ public final class MobAiService {
 		String name = effect.getEffect().value().getDisplayName().getString();
 		boolean harmful = !effect.getEffect().value().isBeneficial();
 		String desc = harmful
-				? "（玩家" + player.getGameProfile().name() + "向你施加了" + name + "，你感觉很不好，用符合性格的方式抱怨或发怒）"
-				: "（玩家" + player.getGameProfile().name() + "向你施加了" + name + "，你可能会感到好奇、舒服或警惕，用符合性格的方式回应）";
+				? (isEnglishUi()
+					? "(Player " + player.getGameProfile().name() + " applied " + name + " to you; you feel awful. Complain or get angry in character)"
+					: "（玩家" + player.getGameProfile().name() + "向你施加了" + name + "，你感觉很不好，用符合性格的方式抱怨或发怒）")
+				: (isEnglishUi()
+					? "(Player " + player.getGameProfile().name() + " applied " + name + " to you; you may feel curious, comfortable or wary. Respond in character)"
+					: "（玩家" + player.getGameProfile().name() + "向你施加了" + name + "，你可能会感到好奇、舒服或警惕，用符合性格的方式回应）");
 		respond(player, mob, desc, false);
 	}
 
@@ -318,10 +336,13 @@ public final class MobAiService {
 		if (last != null && now - last < 30000) return; // 30秒冷却
 		LAST_COPPER_MAINTAIN.put(mob.getUUID(), now);
 
-		String action = waxed ? "用蜂蜡保护你不再氧化" : "帮你除锈";
+		String action = waxed
+				? t("用蜂蜡保护你不再氧化", "protected you with wax from oxidizing")
+				: t("帮你除锈", "removed your rust");
 		MobMindState.adjustFriendship(mob, player.getUUID(), 8);
-		respond(player, mob, "（玩家" + player.getGameProfile().name() + "刚刚" + action
-				+ "，你感到很受用。用机械短句风格表达感谢，可以提到任务、按钮或铜锈）", false);
+		respond(player, mob, isEnglishUi()
+				? "(Player " + player.getGameProfile().name() + " just " + action + ". You feel much better. Express thanks in short mechanical phrases; you may mention tasks, buttons or rust)"
+				: "（玩家" + player.getGameProfile().name() + "刚刚" + action + "，你感到很受用。用机械短句风格表达感谢，可以提到任务、按钮或铜锈）", false);
 	}
 
 	// ---------- 入口：玩家送盔甲 ----------
@@ -337,8 +358,9 @@ public final class MobAiService {
 		LAST_ARMOR_REACT.put(mob.getUUID(), now);
 
 		MobMindState.adjustFriendship(mob, player.getUUID(), 12);
-		respond(player, mob, "（玩家" + player.getGameProfile().name() + "送了你一件" + itemName
-				+ "，你已经穿上了。用符合你性格的方式回应这份礼物）", false);
+		respond(player, mob, isEnglishUi()
+				? "(Player " + player.getGameProfile().name() + " gave you a " + itemName + " and you have put it on. Respond to the gift in character)"
+				: "（玩家" + player.getGameProfile().name() + "送了你一件" + itemName + "，你已经穿上了。用符合你性格的方式回应这份礼物）", false);
 	}
 
 	// ---------- 入口：僵尸村民被玩家救治 ----------
@@ -354,8 +376,9 @@ public final class MobAiService {
 		LAST_CURE_REACT.put(zv.getUUID(), now);
 
 		MobMindState.adjustFriendship(zv, player.getUUID(), 25);
-		respond(player, zv, "（玩家" + player.getGameProfile().name()
-				+ "正在用虚弱药水和金苹果救你，你很快就能变回普通村民。用劫后余生的感激语气对他说点什么）", false);
+		respond(player, zv, isEnglishUi()
+				? "(Player " + player.getGameProfile().name() + " is curing you with Weakness potion and a golden apple; you will soon turn back into a normal villager. Say something grateful, as if you have survived a disaster)"
+				: "（玩家" + player.getGameProfile().name() + "正在用虚弱药水和金苹果救你，你很快就能变回普通村民。用劫后余生的感激语气对他说点什么）", false);
 	}
 
 	// ---------- 入口：玩家喂食物 ----------
@@ -369,8 +392,9 @@ public final class MobAiService {
 		Long last = LAST_FOOD_REACT.get(mob.getUUID());
 		if (last != null && now - last < 5000) return; // 5秒冷却
 		LAST_FOOD_REACT.put(mob.getUUID(), now);
-		respond(player, mob, "（玩家" + player.getGameProfile().name() + "喂你吃了" + foodName
-				+ "，你感觉好多了。用符合你性格的方式回应）", false);
+		respond(player, mob, isEnglishUi()
+				? "(Player " + player.getGameProfile().name() + " fed you " + foodName + ". You feel much better. Respond in character)"
+				: "（玩家" + player.getGameProfile().name() + "喂你吃了" + foodName + "，你感觉好多了。用符合你性格的方式回应）", false);
 	}
 
 	// ---------- 入口：玩家扔礼物给生物 ----------
@@ -383,8 +407,9 @@ public final class MobAiService {
 		Long last = LAST_GIFT_REACT.get(mob.getUUID());
 		if (last != null && now - last < 5000) return; // 5秒冷却
 		LAST_GIFT_REACT.put(mob.getUUID(), now);
-		respond(player, mob, "（玩家" + player.getGameProfile().name() + "送给你" + count + "个" + itemName
-				+ "，你收下了。用符合你性格的方式表达感谢或开心）", false);
+		respond(player, mob, isEnglishUi()
+				? "(Player " + player.getGameProfile().name() + " gave you " + count + " " + itemName + "(s). You accepted it. Express thanks or happiness in character)"
+				: "（玩家" + player.getGameProfile().name() + "送给你" + count + "个" + itemName + "，你收下了。用符合你性格的方式表达感谢或开心）", false);
 	}
 
 	// ---------- 入口：猪灵原版金锭以物易物 ----------
@@ -415,8 +440,9 @@ public final class MobAiService {
 		if (player == null || !player.isAlive() || player.distanceTo(piglin) > 32) return;
 
 		MobMindState.adjustFriendship(piglin, playerId, 3);
-		respond(player, piglin, "（你刚刚收下玩家" + player.getGameProfile().name()
-				+ "的金锭，并把交易得到的物品回赠给他。用符合你性格的方式回应这次交易）", false);
+		respond(player, piglin, isEnglishUi()
+				? "(You just accepted a gold ingot from player " + player.getGameProfile().name() + " and gave back the traded item. Respond to this trade in character)"
+				: "（你刚刚收下玩家" + player.getGameProfile().name() + "的金锭，并把交易得到的物品回赠给他。用符合你性格的方式回应这次交易）", false);
 	}
 
 	// ---------- 入口：猪灵因玩家挖金块/开宝箱发怒 ----------
@@ -433,8 +459,9 @@ public final class MobAiService {
 		MobMindState.adjustFriendship(piglin, player.getUUID(), -8);
 		long gameTime = piglin.level().getLevelData().getGameTime();
 		MobMindState.provoke(piglin, player.getUUID(), gameTime + 6000); // 激怒5分钟
-		respond(player, piglin, "（玩家" + player.getGameProfile().name()
-				+ "正在挖你们的金块或者翻你们的宝箱！你被激怒了。用符合你性格的方式呵斥、威胁或怒吼）", false);
+		respond(player, piglin, isEnglishUi()
+				? "(Player " + player.getGameProfile().name() + " is mining your gold blocks or rummaging through your chests! You are furious. Shout, threaten or roar in character)"
+				: "（玩家" + player.getGameProfile().name() + "正在挖你们的金块或者翻你们的宝箱！你被激怒了。用符合你性格的方式呵斥、威胁或怒吼）", false);
 	}
 
 	// ---------- 入口：玩家破坏末地水晶，末影龙发怒 ----------
@@ -451,8 +478,9 @@ public final class MobAiService {
 		MobMindState.adjustFriendship(dragon, player.getUUID(), -10);
 		long gameTime = dragon.level().getLevelData().getGameTime();
 		MobMindState.provoke(dragon, player.getUUID(), gameTime + 6000); // 激怒5分钟
-		respond(player, dragon, "（玩家" + player.getGameProfile().name()
-				+ "正在破坏给你回血的末地水晶！你感到愤怒和痛苦，用符合你性格的方式怒吼或威胁他停下）", false);
+		respond(player, dragon, isEnglishUi()
+				? "(Player " + player.getGameProfile().name() + " is destroying the End Crystal that heals you! You feel rage and agony. Roar or threaten him to stop in character)"
+				: "（玩家" + player.getGameProfile().name() + "正在破坏给你回血的末地水晶！你感到愤怒和痛苦，用符合你性格的方式怒吼或威胁他停下）", false);
 	}
 
 	// ---------- 入口：末影龙被末地水晶复活 ----------
@@ -479,8 +507,9 @@ public final class MobAiService {
 			}
 		}
 		if (nearest == null) return;
-		respond(nearest, dragon, "（你刚刚被末地水晶复活，重新降临末地。玩家" + nearest.getGameProfile().name()
-				+ "就在附近。用符合你性格的方式宣告你的归来或警告玩家）", false);
+		respond(nearest, dragon, isEnglishUi()
+				? "(You have just been resurrected by an End Crystal and returned to the End. Player " + nearest.getGameProfile().name() + " is nearby. Announce your return or warn the player in character)"
+				: "（你刚刚被末地水晶复活，重新降临末地。玩家" + nearest.getGameProfile().name() + "就在附近。用符合你性格的方式宣告你的归来或警告玩家）", false);
 	}
 
 	// ---------- 入口：朋友关系且低血量时主动向玩家要食物 ----------
@@ -506,8 +535,9 @@ public final class MobAiService {
 			Long last = LAST_FOOD_REQUEST.get(mob.getUUID());
 			if (last != null && gameTime - last < 2400) continue; // 2分钟冷却
 			LAST_FOOD_REQUEST.put(mob.getUUID(), gameTime);
-			respond(player, mob, "（你肚子饿了，血量也不足，向玩家" + player.getGameProfile().name()
-					+ "要点吃的。用符合你性格的方式撒娇、抱怨或直接开口）", false);
+			respond(player, mob, isEnglishUi()
+					? "(You are hungry and low on health. Ask player " + player.getGameProfile().name() + " for some food. Whine, complain or just ask directly in character)"
+					: "（你肚子饿了，血量也不足，向玩家" + player.getGameProfile().name() + "要点吃的。用符合你性格的方式撒娇、抱怨或直接开口）", false);
 			return; // 每轮最多触发一次
 		}
 	}
@@ -541,8 +571,9 @@ public final class MobAiService {
 		for (int i = 0; i < limit; i++) {
 			Mob ally = allies.get(i);
 			Personality p = MobMindState.personalityOf(ally);
-			respond(player, ally, "（你看见" + attackerName + "正在攻击" + playerName
-					+ "，而你对这个玩家印象不错。用符合你性格的方式呵斥、阻止或嘲笑攻击者）", false);
+			respond(player, ally, isEnglishUi()
+					? "(You see " + attackerName + " attacking " + playerName + " and you have a good impression of this player. Shout at, stop or mock the attacker in character)"
+					: "（你看见" + attackerName + "正在攻击" + playerName + "，而你对这个玩家印象不错。用符合你性格的方式呵斥、阻止或嘲笑攻击者）", false);
 			// 暴躁程度越高，越可能真的动手帮玩家
 			if (ally.getRandom().nextInt(100) < p.temper / 2) {
 				ally.setTarget(attacker);
@@ -571,7 +602,7 @@ public final class MobAiService {
 			if (player.getRandom().nextInt(100) >= p.sociability / 2) continue;
 
 			LAST_GREET.put(mob.getUUID(), gameTime);
-			respond(player, mob, "（玩家路过你身边，请主动打个招呼）", false);
+			respond(player, mob, t("（玩家路过你身边，请主动打个招呼）", "(A player is passing by. Greet them proactively)"), false);
 			return; // 每轮最多一只生物搭话
 		}
 	}
@@ -593,7 +624,8 @@ public final class MobAiService {
 				Long last = LAST_TAUNT.get(mob.getUUID());
 				if (last != null && gameTime - last < 3600) continue; // 3分钟冷却
 				LAST_TAUNT.put(mob.getUUID(), gameTime);
-				respond(player, mob, "（你发现这个玩家开着创造模式，你根本伤不到他。用你自己的风格激他、嘲讽他，让他换成生存模式和你真正打一场）", false);
+				respond(player, mob, t("（你发现这个玩家开着创造模式，你根本伤不到他。用你自己的风格激他、嘲讽他，让他换成生存模式和你真正打一场）",
+					"(You notice this player is in Creative mode and you cannot hurt them. Taunt and provoke them in your own style, daring them to switch to Survival and fight you for real)"), false);
 				return true;
 			}
 		}
@@ -627,12 +659,15 @@ public final class MobAiService {
 	// ---------- 入口：以物易物交付完成 ----------
 
 	public static void notifyBarterCompleted(ServerPlayer player, Mob mob, String giveDesc, String takeDesc) {
-		respond(player, mob, "（玩家按约定把 " + giveDesc + " 扔给了你，你把 " + takeDesc + " 交给了玩家。交易完成，用你自己的风格回应一句）", false);
+		respond(player, mob, isEnglishUi()
+				? "(The player threw " + giveDesc + " to you as agreed, and you handed " + takeDesc + " to the player. The trade is complete. Respond in your own style)"
+				: "（玩家按约定把 " + giveDesc + " 扔给了你，你把 " + takeDesc + " 交给了玩家。交易完成，用你自己的风格回应一句）", false);
 	}
 
 	public static void notifyBarterDealMade(ServerPlayer player, Mob mob, String giveDesc, String takeDesc) {
-		respond(player, mob, "（你和玩家约定：他给你 " + giveDesc + "，你回赠 " + takeDesc
-				+ "。现在等待玩家把约定物品扔给你，不要改口。回复一句确认即可）", false);
+		respond(player, mob, isEnglishUi()
+				? "(You and the player agreed: they give you " + giveDesc + ", and you give back " + takeDesc + ". Now wait for the player to throw the agreed items to you; do not change the deal. Just confirm with one line)"
+				: "（你和玩家约定：他给你 " + giveDesc + "，你回赠 " + takeDesc + "。现在等待玩家把约定物品扔给你，不要改口。回复一句确认即可）", false);
 	}
 
 	// ---------- 入口：村民护床 ----------
@@ -640,15 +675,19 @@ public final class MobAiService {
 	/** 玩家睡了村民的床：村民喝止（会赶人的放狠话，不赶的抱怨） */
 	public static void scoldBedThief(ServerPlayer player, Mob villager, boolean willKick) {
 		respond(player, villager, willKick
-				? "（这个玩家占了你的床睡觉！用你自己的风格喝止他，让他立刻滚下床，警告他再不起来你就直接掀他下去）"
-				: "（这个玩家占了你的床睡觉。用你自己的风格抱怨两句，让他知道你很不爽，但你今晚懒得跟他计较）", false);
+				? t("（这个玩家占了你的床睡觉！用你自己的风格喝止他，让他立刻滚下床，警告他再不起来你就直接掀他下去）",
+					"(This player is sleeping in your bed! Stop them in your own style; tell them to get out right now, or warn them you'll throw them out)")
+				: t("（这个玩家占了你的床睡觉。用你自己的风格抱怨两句，让他知道你很不爽，但你今晚懒得跟他计较）",
+					"(This player is sleeping in your bed. Complain a bit in your own style; let them know you're annoyed, but you can't be bothered tonight)"), false);
 	}
 
 	/** 裁决结果：赶下床后放狠话，或忍了嘟囔一句 */
 	public static void bedKickResolved(ServerPlayer player, Mob villager, boolean kicked) {
 		respond(player, villager, kicked
-				? "（他赖着不走，你直接把他掀下了床，自己躺回去。用你的风格撂一句狠话）"
-				: "（他还是没起床，你忍了，自己另外找地方将就一晚。用你的风格嘟囔一句）", false);
+				? t("（他赖着不走，你直接把他掀下了床，自己躺回去。用你的风格撂一句狠话）",
+					"(He refused to get up, so you threw him out of the bed and lay back down. Drop a tough line in your style)")
+				: t("（他还是没起床，你忍了，自己另外找地方将就一晚。用你的风格嘟囔一句）",
+					"(He still didn't get up, so you endured it and found somewhere else to spend the night. Mutter something in your style)"), false);
 	}
 
 	// ---------- 核心流程 ----------
@@ -758,31 +797,44 @@ public final class MobAiService {
 	// ---------- 提示词 ----------
 
 	private static List<OpenAiClient.ChatMessage> buildMessages(Personality persona, Mob mob,
-																ServerPlayer player, String userText) {
+															ServerPlayer player, String userText) {
 		int friendship = MobMindState.friendship(mob, player.getUUID());
 		Level level = mob.level();
+		boolean english = isEnglishUi();
 		long dayTime = level.getOverworldClockTime() % 24000;
-		String timeDesc = (dayTime >= 13000 && dayTime <= 23000) ? "夜晚" : "白天";
-		String weather = level.isThundering() ? "雷暴" : level.isRaining() ? "下雨" : "晴朗";
-		String hand = player.getMainHandItem().isEmpty() ? "空手" : player.getMainHandItem().getHoverName().getString();
+		String timeDesc = (dayTime >= 13000 && dayTime <= 23000)
+				? t("夜晚", "night") : t("白天", "day");
+		String weather = level.isThundering() ? t("雷暴", "thunderstorm")
+				: level.isRaining() ? t("下雨", "rainy") : t("晴朗", "clear");
+		String hand = player.getMainHandItem().isEmpty()
+				? t("空手", "empty hand") : player.getMainHandItem().getHoverName().getString();
 		boolean targetingPlayer = mob.getTarget() == player;
-		String relation = friendship < 20 ? "死敌" : friendship < 40 ? "陌生" : friendship < 60 ? "认识" : friendship < 80 ? "朋友" : "挚友";
-		String gameMode = player.isCreative() ? "创造模式（你伤不到他）" : "生存模式";
+		String relation = friendship < 20 ? t("死敌", "mortal enemy")
+				: friendship < 40 ? t("陌生", "stranger")
+				: friendship < 60 ? t("认识", "acquaintance")
+				: friendship < 80 ? t("朋友", "friend") : t("挚友", "best friend");
+		String gameMode = player.isCreative()
+				? t("创造模式（你伤不到他）", "Creative (you cannot hurt him)")
+				: t("生存模式", "Survival");
 		boolean piglinNeutralGold = isPiglin(mob) && !isPiglinBrute(mob) && hasAnyGoldArmor(player);
 		String tauntTrait = Boolean.TRUE.equals(persona.creativeTaunt) && !piglinNeutralGold
-				? "\n- 你极度渴望和玩家公平决斗：只要他还在创造模式，你就忍不住三句不离让他换成生存模式再来面对你。" : "";
-		String environment = EnvironmentSense.describe(mob);
+				? t("\n- 你极度渴望和玩家公平决斗：只要他还在创造模式，你就忍不住三句不离让他换成生存模式再来面对你。",
+						"\n- You crave a fair duel with the player: as long as they are in Creative mode, you can't stop taunting them to switch to Survival and face you.")
+				: "";
+		String environment = EnvironmentSense.describe(mob, english);
 
 		PersonaRegistry.Persona spec = PersonaRegistry.forMob(mob);
-		String personaText = spec != null ? spec.text() : "（无专属设定，按该生物的原版习性扮演）";
+		String personaText = spec != null ? spec.text()
+				: t("（无专属设定，按该生物的原版习性扮演）", "(No unique settings; roleplay according to the mob's vanilla behavior)");
 		String alignmentDesc = persona.alignment != null
-				? "该个体在首次生成时被抽取为「" + persona.alignment + "」，此结果永久固定、不会重抽，必须严格遵守设定中该类型立场的表现方式。"
+				? t("该个体在首次生成时被抽取为「" + persona.alignment + "」，此结果永久固定、不会重抽，必须严格遵守设定中该类型立场的表现方式。",
+						"This individual was rolled as 「" + persona.alignment + "」 on first spawn. This result is permanent and must strictly govern how this alignment behaves.")
 				: "";
 
 		// 村民/流浪商人：注入在售商品列表供砍价参考
 		StringBuilder offersSection = new StringBuilder();
 		if (mob instanceof AbstractVillager villager && !villager.getOffers().isEmpty()) {
-			offersSection.append("【你在售的商品】\n");
+			offersSection.append(english ? "[Items You Are Selling]\n" : "【你在售的商品】\n");
 			var offers = villager.getOffers();
 			for (int i = 0; i < Math.min(offers.size(), 12); i++) {
 				var o = offers.get(i);
@@ -793,45 +845,88 @@ public final class MobAiService {
 			}
 		}
 
-		String system = """
-				你正在 Minecraft 世界里扮演一只生物，必须完全代入角色，禁止提及你是 AI。
-				【生物设定（最高优先级，必须严格遵守）】
-				%s
-				【本个体的性格抽取结果】
-				%s
-				- 你的名字: %s
-				- 外向程度: %d/100，暴躁程度: %d/100，幽默感: %d/100
-				【与玩家的关系】
-				- 玩家名: %s，好感度: %d/100（关系: %s）
-				- 玩家游戏模式: %s%s
-				【当前处境】
-				- 生命值 %.0f/%.0f，%s，天气%s
-				- 玩家手持: %s
-				- 你正在攻击该玩家: %s
-				- 你当前的处境: %s
-				%s【回复规则】
-				1. 只输出一行 JSON：{"say":"...","mood":"...","action":"...","friendship":数字,"bargain":null,"barter":null}
-				2. say：用第一人称口语，严格符合你的设定、性格立场与说话风格，不超过60字。语言规则（必须遵守）：玩家使用什么语言，你就必须用完全相同语言回复；中文玩家→中文回复，英文玩家→英文回复，严禁混用或突然切换语言。
-				3. mood：一个情绪词，如 开心/生气/害怕/好奇/平静
-				4. action 必须是 none|calm|follow|stay|flee|gift|attack 之一：
-				   - 玩家请求你跟随/同行且你愿意 → follow
-				   - 玩家请求和解/别打他，且你愿意停手 → calm
-				   - 玩家让你待在原地/停下 → stay
-				   - 你被吓到或想逃走 → flee
-				   - 你想送玩家一个小礼物 → gift
-				   - 你被激怒想攻击玩家（仅限敌对生物，且需符合你的性格立场） → attack
-				   - 其他情况 → none
-				5. friendship：本次对话后好感度增减，-10 到 10 的整数。友善话语+1~5，辱骂威胁-3~10，依据你的暴躁程度决定敏感度
-				6. 好感度低时应表现得敌对或警惕；好感度高时应亲切热情；但立场与行为底线永远以你的性格抽取结果为准
-				7.【砍价-仅村民/流浪商人】玩家对某个在售商品砍价时：bargain={"item":"商品名","agree":"yes或no"}，否则为 null。是否同意由你的性格立场、与玩家的关系和玩家的话术决定；每个商品最多只能砍成一次，重复砍价你应该拒绝（系统会自动处理涨价）。
-				8.【以物易物】谈妥时设 barter={"gives":[{"name":"玩家应给你的物品","count":数量},...],"takes":[{"name":"你回赠的物品","count":数量},...]}。gives=玩家要给你的列表，takes=你给玩家的列表。例：玩家"3个苹果换5个腐肉"→{"gives":[{"name":"苹果","count":3}],"takes":[{"name":"腐肉","count":5}]}；"8个绿宝石加1个蛋糕换铁胸甲"→{"gives":[{"name":"绿宝石","count":8},{"name":"蛋糕","count":1}],"takes":[{"name":"铁胸甲","count":1}]}。玩家把所有 gives 物品扔到你脚边前，不准把 takes 物品丢出来，也不要 action:gift。口头答应但没 barter 等于拒绝。回赠物品要符合身份（僵尸给腐肉、骷髅给骨头等），1-16个。
-				""".formatted(
-				personaText, alignmentDesc, persona.name,
-				persona.sociability, persona.temper, persona.humor,
-				player.getGameProfile().name(), friendship, relation,
-				gameMode, tauntTrait,
-				mob.getHealth(), mob.getMaxHealth(), timeDesc, weather, hand,
-				targetingPlayer ? "是" : "否", environment, offersSection.toString());
+		String system;
+		if (english) {
+			system = """
+					You are roleplaying a mob in Minecraft. Stay fully in character and never mention that you are an AI.
+					[Mob Settings (highest priority)]
+					%s
+					[Personality Roll for This Individual]
+					%s
+					- Your name: %s
+					- Sociability: %d/100, Temper: %d/100, Humor: %d/100
+					[Relationship with Player]
+					- Player name: %s, Friendship: %d/100 (Relation: %s)
+					- Player game mode: %s%s
+					[Current Situation]
+					- Health %.0f/%.0f, %s, weather: %s
+					- Player holding: %s
+					- You are attacking this player: %s
+					- Your current situation: %s
+					%s[Reply Rules]
+					1. Output exactly one line of JSON: {"say":"...","mood":"...","action":"...","friendship":number,"bargain":null,"barter":null}
+					2. say: first-person spoken style, strictly follow your settings, personality stance and speaking style, max 60 characters. LANGUAGE RULE (must follow): the game client is in English, so reply in English. If the player's message is in another language, still translate your reply into natural English. Never mix languages or suddenly switch languages.
+					3. mood: an emotion word, e.g. happy/angry/scared/curious/calm
+					4. action must be one of none|calm|follow|stay|flee|gift|attack:
+					   - Player asks you to follow/go with them and you agree → follow
+					   - Player asks you to make peace/stop attacking and you agree → calm
+					   - Player tells you to stay/wait → stay
+					   - You are scared or want to flee → flee
+					   - You want to give the player a small gift → gift
+					   - You are enraged and want to attack the player (hostile mobs only, must fit your personality stance) → attack
+					   - Otherwise → none
+					5. friendship: change in friendship from this conversation, integer -10 to 10. Friendly words +1~5, insults/threats -3~10, based on your temper sensitivity
+					6. When friendship is low act hostile or wary; when high act warm and enthusiastic; but your stance and behavioral bottom line are always determined by your personality roll
+					7. [Bargain - villagers/wandering traders only] When player haggles over a listed item: bargain={"item":"item name","agree":"yes or no"}, otherwise null. Decision based on your personality stance, relationship with player and player's rhetoric; each item can only be bargained down once, repeated haggling should be refused (system will handle price increases).
+					8. [Barter] When a deal is reached set barter={"gives":[{"name":"item player should give you","count":number},...],"takes":[{"name":"item you give back","count":number},...]}. gives = items player gives you, takes = items you give back. Example: player "3 apples for 5 rotten flesh" → {"gives":[{"name":"apple","count":3}],"takes":[{"name":"rotten flesh","count":5}]}; "8 emeralds and 1 cake for iron chestplate" → {"gives":[{"name":"emerald","count":8},{"name":"cake","count":1}],"takes":[{"name":"iron chestplate","count":1}]}. Before player throws all gives items at your feet, do NOT throw takes items and do NOT action:gift. Verbal agreement without barter means refusal. Return items should fit your identity (zombie gives rotten flesh, skeleton gives bones, etc.), 1-16 count.
+					""".formatted(
+					personaText, alignmentDesc, persona.name,
+					persona.sociability, persona.temper, persona.humor,
+					player.getGameProfile().name(), friendship, relation,
+					gameMode, tauntTrait,
+					mob.getHealth(), mob.getMaxHealth(), timeDesc, weather, hand,
+					targetingPlayer ? "yes" : "no", environment, offersSection.toString());
+		} else {
+			system = """
+					你正在 Minecraft 世界里扮演一只生物，必须完全代入角色，禁止提及你是 AI。
+					【生物设定（最高优先级，必须严格遵守）】
+					%s
+					【本个体的性格抽取结果】
+					%s
+					- 你的名字: %s
+					- 外向程度: %d/100，暴躁程度: %d/100，幽默感: %d/100
+					【与玩家的关系】
+					- 玩家名: %s，好感度: %d/100（关系: %s）
+					- 玩家游戏模式: %s%s
+					【当前处境】
+					- 生命值 %.0f/%.0f，%s，天气%s
+					- 玩家手持: %s
+					- 你正在攻击该玩家: %s
+					- 你当前的处境: %s
+					%s【回复规则】
+					1. 只输出一行 JSON：{"say":"...","mood":"...","action":"...","friendship":数字,"bargain":null,"barter":null}
+					2. say：用第一人称口语，严格符合你的设定、性格立场与说话风格，不超过60字。语言规则（必须遵守）：玩家使用什么语言，你就必须用完全相同语言回复；中文玩家→中文回复，英文玩家→英文回复，严禁混用或突然切换语言。
+					3. mood：一个情绪词，如 开心/生气/害怕/好奇/平静
+					4. action 必须是 none|calm|follow|stay|flee|gift|attack 之一：
+					   - 玩家请求你跟随/同行且你愿意 → follow
+					   - 玩家请求和解/别打他，且你愿意停手 → calm
+					   - 玩家让你待在原地/停下 → stay
+					   - 你被吓到或想逃走 → flee
+					   - 你想送玩家一个小礼物 → gift
+					   - 你被激怒想攻击玩家（仅限敌对生物，且需符合你的性格立场） → attack
+					   - 其他情况 → none
+					5. friendship：本次对话后好感度增减，-10 到 10 的整数。友善话语+1~5，辱骂威胁-3~10，依据你的暴躁程度决定敏感度
+					6. 好感度低时应表现得敌对或警惕；好感度高时应亲切热情；但立场与行为底线永远以你的性格抽取结果为准
+					7.【砍价-仅村民/流浪商人】玩家对某个在售商品砍价时：bargain={"item":"商品名","agree":"yes或no"}，否则为 null。是否同意由你的性格立场、与玩家的关系和玩家的话术决定；每个商品最多只能砍成一次，重复砍价你应该拒绝（系统会自动处理涨价）。
+					8.【以物易物】谈妥时设 barter={"gives":[{"name":"玩家应给你的物品","count":数量},...],"takes":[{"name":"你回赠的物品","count":数量},...]}。gives=玩家要给你的列表，takes=你给玩家的列表。例：玩家"3个苹果换5个腐肉"→{"gives":[{"name":"苹果","count":3}],"takes":[{"name":"腐肉","count":5}]}；"8个绿宝石加1个蛋糕换铁胸甲"→{"gives":[{"name":"绿宝石","count":8},{"name":"蛋糕","count":1}],"takes":[{"name":"铁胸甲","count":1}]}。玩家把所有 gives 物品扔到你脚边前，不准把 takes 物品丢出来，也不要 action:gift。口头答应但没 barter 等于拒绝。回赠物品要符合身份（僵尸给腐肉、骷髅给骨头等），1-16个。
+					""".formatted(
+					personaText, alignmentDesc, persona.name,
+					persona.sociability, persona.temper, persona.humor,
+					player.getGameProfile().name(), friendship, relation,
+					gameMode, tauntTrait,
+					mob.getHealth(), mob.getMaxHealth(), timeDesc, weather, hand,
+					targetingPlayer ? "是" : "否", environment, offersSection.toString());
+		}
 
 		List<OpenAiClient.ChatMessage> messages = new ArrayList<>();
 		messages.add(new OpenAiClient.ChatMessage("system", system));
@@ -985,17 +1080,18 @@ public final class MobAiService {
 		}
 	}
 
-	// 玩家砍价意图
+	// 玩家砍价意图（中英）
 	private static final java.util.regex.Pattern HAGGLE_INTENT = java.util.regex.Pattern
-			.compile("(便宜|砍价|优惠|降价|打折|少[点一儿]|太贵|贵死)");
+			.compile("(便宜|砍价|优惠|降价|打折|少[点一儿]|太贵|贵死|cheaper|discount|lower the price|too expensive|overpriced|haggle|bargain)");
 
 	/**
 	 * 砍价兜底：玩家明确讨价还价且提到某个在售商品，生物台词接受/拒绝 → 按结果处理。
 	 */
 	private static Bargain extractBargainFromText(String userText, String say, AbstractVillager villager) {
-		if (userText == null || say == null || userText.startsWith("（")) return null;
+		if (userText == null || say == null || userText.startsWith("（") || userText.startsWith("(")) return null;
+		boolean english = isEnglishUi();
 		if (!HAGGLE_INTENT.matcher(userText).find()) return null;
-		ItemCatalog.MatchedItem wanted = ItemCatalog.findInText(userText, false);
+		ItemCatalog.MatchedItem wanted = ItemCatalog.findInText(userText, false, english);
 		if (wanted == null) return null;
 		String offerName = null;
 		var offers = villager.getOffers();
@@ -1012,29 +1108,51 @@ public final class MobAiService {
 		return new Bargain(offerName, accept);
 	}
 
-	// 生物台词中的明确拒绝（出现时不兜底创建约定）
+	// 生物台词中的明确拒绝（出现时不兜底创建约定）（中英）
 	private static final java.util.regex.Pattern REFUSE_PATTERN = java.util.regex.Pattern
-			.compile("(不换|不行|不能|不要|拒绝|免谈|没兴趣|停止询问|别烦|不考虑|凭什么|想得美|做梦|滚)");
-	// 生物台词中的接受成交
+			.compile("(不换|不行|不能|不要|拒绝|免谈|没兴趣|停止询问|别烦|不考虑|凭什么|想得美|做梦|滚|no way|nope|never|refuse|reject|not happening|i won't|i can't|forget it)");
+	// 生物台词中的接受成交（中英）
 	private static final java.util.regex.Pattern ACCEPT_PATTERN = java.util.regex.Pattern
-			.compile("(可以|成交|换吧|接受|同意|没问题|一言为定|行[，。！,!.]|好[，。！,!.]|给你)");
+			.compile("(可以|成交|换吧|接受|同意|没问题|一言为定|行[，。！,!.]|好[，。！,!.]|给你|deal|okay|ok|sure|accepted|agreed|yes|alright|fine|let's do it|done)");
 
 	/**
-	 * 模型漏输出 barter 字段时的兜底：玩家文本含"A换B"且生物台词表示接受 → 成立约定。
+	 * 模型漏输出 barter 字段时的兜底：玩家文本含"A换B"/"A for B"/"trade A for B"且生物台词表示接受 → 成立约定。
 	 * 支持多个支付/回赠物品（如"8个绿宝石加1个蛋糕换铁胸甲"）。
-	 * 仅用于玩家真实对话（非系统触发），用户文本以（开头的是系统注入，跳过。
+	 * 仅用于玩家真实对话（非系统触发），用户文本以（或(开头的是系统注入，跳过。
 	 */
 	private static Barter extractBarterFromText(String userText, String say) {
 		if (userText == null || say == null) return null;
-		if (userText.startsWith("（") || !userText.contains("换")) return null;
+		boolean english = isEnglishUi();
+		if (userText.startsWith("（") || userText.startsWith("(")) return null;
 		if (REFUSE_PATTERN.matcher(say).find()) return null;
 		if (!ACCEPT_PATTERN.matcher(say).find()) return null;
 
-		int sep = userText.indexOf('换');
-		String left = userText.substring(0, sep);                    // 玩家给出的
-		String right = userText.substring(sep + 1);                  // 玩家想要的
-		List<ItemCatalog.MatchedItem> gives = ItemCatalog.findAllInText(left);
-		List<ItemCatalog.MatchedItem> takes = ItemCatalog.findAllInText(right);
+		int sep = -1;
+		if (!english) {
+			sep = userText.indexOf('换');
+		} else {
+			String lower = userText.toLowerCase();
+			int tradeFor = lower.indexOf("trade ");
+			int forIdx = lower.indexOf(" for ");
+			if (tradeFor >= 0 && forIdx > tradeFor) {
+				sep = forIdx;
+			} else if (forIdx >= 0) {
+				sep = forIdx;
+			}
+		}
+		if (sep < 0) return null;
+
+		String left = userText.substring(0, sep);
+		String right = userText.substring(sep + (english ? 1 : 1));
+		if (english) {
+			// 跳过 "for " / "trade " 前缀
+			String lowerRight = right.toLowerCase();
+			if (lowerRight.startsWith("for ")) right = right.substring(4);
+			String lowerLeft = left.toLowerCase();
+			if (lowerLeft.endsWith("trade ")) left = left.substring(0, left.length() - 6);
+		}
+		List<ItemCatalog.MatchedItem> gives = ItemCatalog.findAllInText(left, english);
+		List<ItemCatalog.MatchedItem> takes = ItemCatalog.findAllInText(right, english);
 		if (gives.isEmpty() || takes.isEmpty()) return null;
 		// 简单去重：同一物品在两边都出现则跳过
 		boolean overlap = gives.stream().anyMatch(g ->
@@ -1074,48 +1192,72 @@ public final class MobAiService {
 
 	private static ParsedReply offlineReply(Personality persona, Mob mob, ServerPlayer player, String text) {
 		String t = text == null ? "" : text;
+		boolean english = isEnglishUi();
 		String say;
-		String mood = "平静";
+		String mood = english ? "calm" : "平静";
 		String action = "none";
 		int delta = 0;
 
-		if (t.contains("攻击") || t.contains("打你")) {
-			say = persona.temper > 50 ? "你竟敢动手？！" : "呜……为什么打我……";
-			mood = persona.temper > 50 ? "生气" : "害怕";
+		if (t.contains("攻击") || t.contains("打你") || (english && (t.toLowerCase().contains("attack") || t.toLowerCase().contains("hit you")))) {
+			say = english
+					? (persona.temper > 50 ? "How dare you hit me?!" : "Ouch... why did you hit me...")
+					: (persona.temper > 50 ? "你竟敢动手？！" : "呜……为什么打我……");
+			mood = english ? (persona.temper > 50 ? "angry" : "scared") : (persona.temper > 50 ? "生气" : "害怕");
 			action = persona.temper > 50 ? "attack" : "flee";
 			delta = -5;
-		} else if (t.contains("别打") || t.contains("和解") || t.contains("朋友") || t.contains("和平")) {
-			say = persona.temper > 70 ? "哼，看在态度还行的份上，先放过你。" : "好呀，那我们就是朋友啦！";
-			mood = "缓和";
+		} else if (t.contains("别打") || t.contains("和解") || t.contains("朋友") || t.contains("和平")
+				|| (english && (t.toLowerCase().contains("stop") || t.toLowerCase().contains("peace") || t.toLowerCase().contains("friend")))) {
+			say = english
+					? (persona.temper > 70 ? "Hmph, your attitude isn't bad, so I'll let you off." : "Sure, then we're friends!")
+					: (persona.temper > 70 ? "哼，看在态度还行的份上，先放过你。" : "好呀，那我们就是朋友啦！");
+			mood = english ? "relieved" : "缓和";
 			action = "calm";
 			delta = 5;
-		} else if (t.contains("跟") || t.contains("走") || t.contains("一起")) {
-			say = persona.sociability > 50 ? "好嘞，跟着你走！" : "……那就陪你走一段吧。";
-			mood = "开心";
+		} else if (t.contains("跟") || t.contains("走") || t.contains("一起")
+				|| (english && (t.toLowerCase().contains("follow") || t.toLowerCase().contains("come") || t.toLowerCase().contains("with me")))) {
+			say = english
+					? (persona.sociability > 50 ? "Alright, I'll follow you!" : "...Fine, I'll walk with you for a while.")
+					: (persona.sociability > 50 ? "好嘞，跟着你走！" : "……那就陪你走一段吧。");
+			mood = english ? "happy" : "开心";
 			action = "follow";
 			delta = 2;
-		} else if (t.contains("待着") || t.contains("停下") || t.contains("别动")) {
-			say = "行，我就在这儿待着。";
+		} else if (t.contains("待着") || t.contains("停下") || t.contains("别动")
+				|| (english && (t.toLowerCase().contains("stay") || t.toLowerCase().contains("wait") || t.toLowerCase().contains("stop")))) {
+			say = english ? "Okay, I'll stay right here." : "行，我就在这儿待着。";
 			action = "stay";
-		} else if (t.contains("你好") || t.contains("hi") || t.contains("嗨") || t.contains("（玩家路过")) {
-			say = switch (persona.name.length() % 3) {
-				case 0 -> "你好呀，" + player.getGameProfile().name() + "！";
-				case 1 -> "哟，是你啊。";
-				default -> "嗯？找我有什么事吗？";
-			};
-			mood = "好奇";
+		} else if (t.contains("你好") || t.contains("hi") || t.contains("嗨") || t.contains("（玩家路过")
+				|| (english && (t.toLowerCase().contains("hello") || t.toLowerCase().contains("hi ") || t.toLowerCase().contains("hey")))) {
+			say = english
+					? switch (persona.name.length() % 3) {
+						case 0 -> "Hello there, " + player.getGameProfile().name() + "!";
+						case 1 -> "Oh, it's you.";
+						default -> "Hmm? Did you need something?";
+					}
+					: switch (persona.name.length() % 3) {
+						case 0 -> "你好呀，" + player.getGameProfile().name() + "！";
+						case 1 -> "哟，是你啊。";
+						default -> "嗯？找我有什么事吗？";
+					};
+			mood = english ? "curious" : "好奇";
 			delta = 1;
-		} else if (t.contains("吃") || t.contains("食物")) {
-			say = "说到吃的，我可就来精神了！";
-			mood = "开心";
+		} else if (t.contains("吃") || t.contains("食物") || (english && (t.toLowerCase().contains("food") || t.toLowerCase().contains("eat")))) {
+			say = english ? "Talking about food really perks me up!" : "说到吃的，我可就来精神了！";
+			mood = english ? "happy" : "开心";
 			delta = 1;
 		} else {
-			say = switch ((int) (Math.floorMod(mob.getUUID().hashCode(), 4))) {
-				case 0 -> "哦？继续说，我听着呢。";
-				case 1 -> "嗯嗯，然后呢？";
-				case 2 -> "这事儿嘛……让我想想。";
-				default -> "哈哈，有意思。";
-			};
+			say = english
+					? switch ((int) (Math.floorMod(mob.getUUID().hashCode(), 4))) {
+						case 0 -> "Oh? Go on, I'm listening.";
+						case 1 -> "Mm-hmm, and then?";
+						case 2 -> "Well, let me think about that.";
+						default -> "Haha, interesting.";
+					}
+					: switch ((int) (Math.floorMod(mob.getUUID().hashCode(), 4))) {
+						case 0 -> "哦？继续说，我听着呢。";
+						case 1 -> "嗯嗯，然后呢？";
+						case 2 -> "这事儿嘛……让我想想。";
+						default -> "哈哈，有意思。";
+					};
 			delta = 1;
 		}
 		return new ParsedReply(say, mood, action, delta, null, null);

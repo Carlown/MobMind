@@ -26,6 +26,10 @@ public final class EnvironmentSense {
 
 	/** 一句话描述生物当前所处环境，如"你正坐在船上，雨水正打在你身上，脚下踩着冰块" */
 	public static String describe(Mob mob) {
+		return describe(mob, false);
+	}
+
+	public static String describe(Mob mob, boolean english) {
 		List<String> parts = new ArrayList<>();
 		Level level = mob.level();
 		BlockPos pos = mob.blockPosition();
@@ -33,50 +37,59 @@ public final class EnvironmentSense {
 		// 载具（船/矿车/马等）
 		Entity vehicle = mob.getVehicle();
 		if (vehicle != null) {
-			parts.add("你正乘坐" + vehicle.getType().getDescription().getString());
+			parts.add(english
+					? "you are riding a " + vehicle.getType().getDescription().getString()
+					: "你正乘坐" + vehicle.getType().getDescription().getString());
 		}
 		// 水
 		if (mob.isUnderWater()) {
-			parts.add("你整个人浸在水下，有点喘不过气");
+			parts.add(english ? "you are fully underwater and struggling to breathe"
+					: "你整个人浸在水下，有点喘不过气");
 		} else if (mob.isInWater()) {
-			parts.add("你正在水里扑腾");
+			parts.add(english ? "you are splashing in water" : "你正在水里扑腾");
 		}
 		// 空中
 		if (mob.isFallFlying()) {
-			parts.add("你正在空中滑翔");
+			parts.add(english ? "you are gliding through the air" : "你正在空中滑翔");
 		} else if (!mob.onGround() && mob.getVehicle() == null && mob.fallDistance > 3) {
-			parts.add("你正在往下掉");
+			parts.add(english ? "you are falling" : "你正在往下掉");
 		}
 		if (mob.isSleeping()) {
-			parts.add("你正躺着睡觉");
+			parts.add(english ? "you are lying down asleep" : "你正躺着睡觉");
 		}
 		// 淋雨/下雪
 		if (level.isRainingAt(pos)) {
-			parts.add("雨水正打在你身上");
+			parts.add(english ? "rain is falling on you" : "雨水正打在你身上");
 		}
 		// 维度
 		if (level.dimension() == Level.NETHER) {
-			parts.add("身处下界，四周酷热难耐");
+			parts.add(english ? "you are in the Nether, the heat is scorching"
+					: "身处下界，四周酷热难耐");
 		} else if (level.dimension() == Level.END) {
-			parts.add("身处末地，脚下是无尽虚空");
+			parts.add(english ? "you are in the End, endless void beneath you"
+					: "身处末地，脚下是无尽虚空");
 		}
 		// 脚下方块
 		BlockState below = level.getBlockState(pos.below());
 		if (!below.isAir()) {
-			parts.add("脚下踩着" + below.getBlock().getName().getString());
+			parts.add(english
+					? "standing on " + below.getBlock().getName().getString()
+					: "脚下踩着" + below.getBlock().getName().getString());
 		}
 		// 地下洞穴 / 高处
 		boolean seeSky = level.canSeeSky(pos.above());
 		if (!seeSky && pos.getY() < 60) {
-			parts.add("身处幽暗的地下");
+			parts.add(english ? "in a dark underground cave" : "身处幽暗的地下");
 		} else if (seeSky && pos.getY() > 120) {
-			parts.add("站在高处，视野开阔");
+			parts.add(english ? "standing high up with a wide view" : "站在高处，视野开阔");
 		}
 		// 着火
 		if (mob.isOnFire()) {
-			parts.add("你身上着火了");
+			parts.add(english ? "you are on fire" : "你身上着火了");
 		}
-		return parts.isEmpty() ? "陆地上，一切如常" : String.join("，", parts);
+		return parts.isEmpty()
+				? (english ? "on land, everything is calm" : "陆地上，一切如常")
+				: String.join(english ? ", " : "，", parts);
 	}
 
 	// ---------- 视觉：扫描玩家展示的建筑 ----------
@@ -113,6 +126,10 @@ public final class EnvironmentSense {
 	 * 范围：以玩家为中心 21×13×21，忽略自然方块。
 	 */
 	public static String scanBuild(ServerPlayer player) {
+		return scanBuild(player, false);
+	}
+
+	public static String scanBuild(ServerPlayer player, boolean english) {
 		Level level = player.level();
 		BlockPos center = player.blockPosition();
 		Map<String, Integer> counts = new HashMap<>();
@@ -143,19 +160,26 @@ public final class EnvironmentSense {
 		}
 
 		if (total < 8) {
-			return "四周都是自然景物，看不出什么像样的人工建筑";
+			return english
+					? "The surroundings are all natural scenery, no decent player-built structure in sight"
+					: "四周都是自然景物，看不出什么像样的人工建筑";
 		}
 		List<Map.Entry<String, Integer>> sorted = new ArrayList<>(counts.entrySet());
 		sorted.sort((a, b) -> b.getValue() - a.getValue());
+		String sep = english ? ", " : "、";
 		StringBuilder materials = new StringBuilder();
 		for (int i = 0; i < Math.min(5, sorted.size()); i++) {
-			if (i > 0) materials.append("、");
+			if (i > 0) materials.append(sep);
 			materials.append(sorted.get(i).getKey()).append("×").append(sorted.get(i).getValue());
 		}
 		String size = (maxX - minX + 1) + "×" + (maxY - minY + 1) + "×" + (maxZ - minZ + 1);
-		String desc = "一座约 " + size + "（宽×高×深）的建筑，共约 " + total + " 个人工方块，主要材料：" + materials;
+		String desc = english
+				? "A structure roughly " + size + " (W×H×D), about " + total + " artificial blocks, main materials: " + materials
+				: "一座约 " + size + "（宽×高×深）的建筑，共约 " + total + " 个人工方块，主要材料：" + materials;
 		if (!precious.isEmpty()) {
-			desc += "，还用到了贵重的" + String.join("、", precious);
+			desc += english
+					? ", also uses precious " + String.join(sep, precious)
+					: "，还用到了贵重的" + String.join(sep, precious);
 		}
 		return desc;
 	}
