@@ -43,10 +43,22 @@ public class MobMindConfig {
 	public boolean ttsEnabled = true;
 	/** 生物是否主动打招呼 */
 	public boolean greetingEnabled = true;
+	/** 是否启用创造模式嘲讽（敌对生物嘲讽/激将创造模式玩家换成生存模式） */
+	public boolean creativeTauntEnabled = true;
 	/** 可交互生物的搜索半径（格） */
 	public int interactRadius = 12;
 	/** API 不可用时是否使用内置离线回复 */
 	public boolean offlineFallback = true;
+	/** 是否启用群体关系网络（流言/议论）：被攻击后会向同族传播并降低好感度 */
+	public boolean gossipEnabled = true;
+	/** 流言传播半径（格） */
+	public int gossipRadius = 24;
+	/** 同族相信流言并降低好感度的概率（0-100） */
+	public int gossipChance = 60;
+	/** 流言导致的好感度下降值 */
+	public int gossipPenalty = 6;
+	/** 流言触发同族开口议论的概率（0-100） */
+	public int gossipReactChance = 35;
 
 	// ---------- 本地语音引擎（sherpa-onnx） ----------
 

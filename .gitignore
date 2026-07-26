@@ -41,3 +41,8 @@ mobmind-voice.zip
 
 # Local run logs
 run-client-log.txt
+mobmind_log*.txt
+
+# Crash / debug dumps
+_crash_extract/
+错误报告-*.zip

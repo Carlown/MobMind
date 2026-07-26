@@ -17,17 +17,20 @@ import com.mobmind.util.MobMindExecutor;
 import net.fabricmc.fabric.api.networking.v1.PlayerLookup;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.npc.villager.AbstractVillager;
+import net.minecraft.world.entity.npc.villager.Villager;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.AABB;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Deque;
 import java.util.List;
 import java.util.Map;
@@ -47,6 +50,7 @@ public final class MobAiService {
 	private static final Map<UUID, Long> LAST_POTION_REACT = new ConcurrentHashMap<>();
 	private static final Map<UUID, Long> LAST_GREET = new ConcurrentHashMap<>();
 	private static final Map<UUID, Long> LAST_TAUNT = new ConcurrentHashMap<>();
+	private static final Map<UUID, Long> LAST_GOSSIP = new ConcurrentHashMap<>();
 
 	private MobAiService() {}
 
@@ -229,6 +233,39 @@ public final class MobAiService {
 		MobMindState.clearCalm(mob, player.getUUID()); // 动手即撕毁和解
 		MobMindState.provoke(mob, player.getUUID(), gameTime + 6000); // 激怒5分钟，允许还手
 		respond(player, mob, t("（你突然攻击了它）", "(The player suddenly attacked you)"), true);
+		spreadGossip(player, mob);
+	}
+
+	/** 群体关系网络：受害者向附近同族传播流言，同族相信后降低对玩家的好感度并可能议论 */
+	private static void spreadGossip(ServerPlayer player, Mob victim) {
+		MobMindConfig cfg = MobMindConfig.get();
+		if (!cfg.gossipEnabled) return;
+		long nowMs = System.currentTimeMillis();
+		Long last = LAST_GOSSIP.get(victim.getUUID());
+		if (last != null && nowMs - last < 30000) return; // 30秒冷却
+		LAST_GOSSIP.put(victim.getUUID(), nowMs);
+
+		AABB box = victim.getBoundingBox().inflate(cfg.gossipRadius);
+		List<Mob> peers = victim.level().getEntitiesOfClass(Mob.class, box,
+				m -> m != victim && m.getType() == victim.getType()
+						&& PersonaRegistry.supports(m) && m.isAlive());
+		if (peers.isEmpty()) return;
+		Collections.shuffle(peers);
+		int limit = Math.min(3, peers.size());
+		String victimName = victim.getType().getDescription().getString();
+
+		for (int i = 0; i < limit; i++) {
+			Mob peer = peers.get(i);
+			if (peer.getRandom().nextInt(100) >= cfg.gossipChance) continue;
+			MobMindState.adjustFriendship(peer, player.getUUID(), -cfg.gossipPenalty);
+			MobMindMod.LOGGER.info("[MobMind] 流言传播: {} 听说玩家 {} 打了 {}, 好感度-{}",
+					peer.getType().getDescription().getString(), player.getGameProfile().name(), victimName, cfg.gossipPenalty);
+			if (peer.getRandom().nextInt(100) < cfg.gossipReactChance) {
+				respond(player, peer, isEnglishUi()
+						? "(You heard that player " + player.getGameProfile().name() + " attacked your fellow " + victimName + ". Your opinion of this player worsens. Comment on it in character to nearby peers)"
+						: "（你听说玩家" + player.getGameProfile().name() + "打了你的同族" + victimName + "，你对这个玩家的印象变差了。向旁边的同族议论一句，表达不满或警惕）", false);
+			}
+		}
 	}
 
 	// ---------- 入口：熟人生物被其他人/怪物攻击，向高好感玩家求救 ----------
@@ -375,6 +412,9 @@ public final class MobAiService {
 		if (last != null && now - last < 120000) return; // 2分钟冷却
 		LAST_CURE_REACT.put(zv.getUUID(), now);
 
+		long gameTime = zv.level().getLevelData().getGameTime();
+		// 标记治疗中：持续约 5 分钟（覆盖完整转化时间），并随机决定忠诚倾向
+		MobMindState.markCuringZombieVillager(zv, player.getUUID(), gameTime + 6000);
 		MobMindState.adjustFriendship(zv, player.getUUID(), 25);
 		respond(player, zv, isEnglishUi()
 				? "(Player " + player.getGameProfile().name() + " is curing you with Weakness potion and a golden apple; you will soon turn back into a normal villager. Say something grateful, as if you have survived a disaster)"
@@ -410,6 +450,20 @@ public final class MobAiService {
 		respond(player, mob, isEnglishUi()
 				? "(Player " + player.getGameProfile().name() + " gave you " + count + " " + itemName + "(s). You accepted it. Express thanks or happiness in character)"
 				: "（玩家" + player.getGameProfile().name() + "送给你" + count + "个" + itemName + "，你收下了。用符合你性格的方式表达感谢或开心）", false);
+	}
+
+	private static final Map<UUID, Long> LAST_TNT_PLEA = new ConcurrentHashMap<>();
+
+	/** 村民发现家里有 TNT，请求玩家拆除 */
+	public static void sendScaredTntPlea(Villager villager, ServerPlayer player, BlockPos tntPos) {
+		long now = System.currentTimeMillis();
+		UUID vid = villager.getUUID();
+		Long last = LAST_TNT_PLEA.get(vid);
+		if (last != null && now - last < 10000) return;
+		LAST_TNT_PLEA.put(vid, now);
+		respond(player, villager, isEnglishUi()
+				? "(There is TNT in your house at " + tntPos.getX() + ", " + tntPos.getY() + ", " + tntPos.getZ() + "! You are terrified. Beg " + player.getGameProfile().name() + " to remove it quickly, or you cannot live here safely)"
+				: "（你家" + tntPos.getX() + "," + tntPos.getY() + "," + tntPos.getZ() + "位置放着TNT！你很害怕，恳求" + player.getGameProfile().name() + "快拆掉它，不然你没法安心住在这里）", false);
 	}
 
 	// ---------- 入口：猪灵原版金锭以物易物 ----------
@@ -611,6 +665,7 @@ public final class MobAiService {
 
 	/** 附近创造模式玩家会被"求战型"怪物嘲讽/激将换生存模式。返回是否触发了一只 */
 	public static boolean tryCreativeTaunt(MinecraftServer server) {
+		if (!MobMindConfig.get().creativeTauntEnabled) return false;
 		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
 			if (!player.isCreative()) continue;
 			AABB box = player.getBoundingBox().inflate(16.0);
@@ -817,7 +872,8 @@ public final class MobAiService {
 				? t("创造模式（你伤不到他）", "Creative (you cannot hurt him)")
 				: t("生存模式", "Survival");
 		boolean piglinNeutralGold = isPiglin(mob) && !isPiglinBrute(mob) && hasAnyGoldArmor(player);
-		String tauntTrait = Boolean.TRUE.equals(persona.creativeTaunt) && !piglinNeutralGold
+		String tauntTrait = MobMindConfig.get().creativeTauntEnabled
+				&& Boolean.TRUE.equals(persona.creativeTaunt) && !piglinNeutralGold && player.isCreative()
 				? t("\n- 你极度渴望和玩家公平决斗：只要他还在创造模式，你就忍不住三句不离让他换成生存模式再来面对你。",
 						"\n- You crave a fair duel with the player: as long as they are in Creative mode, you can't stop taunting them to switch to Survival and face you.")
 				: "";
@@ -1116,7 +1172,7 @@ public final class MobAiService {
 			.compile("(可以|成交|换吧|接受|同意|没问题|一言为定|行[，。！,!.]|好[，。！,!.]|给你|deal|okay|ok|sure|accepted|agreed|yes|alright|fine|let's do it|done)");
 
 	/**
-	 * 模型漏输出 barter 字段时的兜底：玩家文本含"A换B"/"A for B"/"trade A for B"且生物台词表示接受 → 成立约定。
+	 * 模型漏输出 barter 字段时的兜底：玩家文本含"A换B"/"A for B"/"trade A for B"/"give A get B"等且生物台词未明确拒绝 → 成立约定。
 	 * 支持多个支付/回赠物品（如"8个绿宝石加1个蛋糕换铁胸甲"）。
 	 * 仅用于玩家真实对话（非系统触发），用户文本以（或(开头的是系统注入，跳过。
 	 */
@@ -1125,31 +1181,53 @@ public final class MobAiService {
 		boolean english = isEnglishUi();
 		if (userText.startsWith("（") || userText.startsWith("(")) return null;
 		if (REFUSE_PATTERN.matcher(say).find()) return null;
-		if (!ACCEPT_PATTERN.matcher(say).find()) return null;
+		// 放宽接受判断：只要台词没拒绝就算接受，提高约定成功率
+		boolean explicitAccept = ACCEPT_PATTERN.matcher(say).find();
+		if (!explicitAccept) {
+			MobMindMod.LOGGER.info("[MobMind] 以物易物兜底：生物未明确接受，但尝试识别约定");
+		}
 
 		int sep = -1;
 		if (!english) {
 			sep = userText.indexOf('换');
+			if (sep < 0) {
+				// 兼容"A换B"、"用A换B"、"拿A换B"之外的表达
+				int gei = userText.indexOf('给');
+				int yao = userText.indexOf('要');
+				int huan = userText.indexOf('换');
+				if (gei >= 0 && yao >= 0 && yao > gei) sep = yao;
+				else if (gei >= 0 && huan > gei) sep = huan;
+			}
 		} else {
 			String lower = userText.toLowerCase();
-			int tradeFor = lower.indexOf("trade ");
 			int forIdx = lower.indexOf(" for ");
+			int giveIdx = lower.indexOf("give ");
+			int getIdx = lower.indexOf("get ");
+			int bringIdx = lower.indexOf("bring ");
+			int tradeFor = lower.indexOf("trade ");
 			if (tradeFor >= 0 && forIdx > tradeFor) {
 				sep = forIdx;
 			} else if (forIdx >= 0) {
 				sep = forIdx;
+			} else if (giveIdx >= 0 && getIdx > giveIdx) {
+				sep = getIdx;
+			} else if (bringIdx >= 0 && getIdx > bringIdx) {
+				sep = getIdx;
 			}
 		}
 		if (sep < 0) return null;
 
 		String left = userText.substring(0, sep);
-		String right = userText.substring(sep + (english ? 1 : 1));
+		String right = userText.substring(sep + 1);
 		if (english) {
-			// 跳过 "for " / "trade " 前缀
+			// 跳过 "for " / "trade " / "get " / "bring " 前缀
 			String lowerRight = right.toLowerCase();
 			if (lowerRight.startsWith("for ")) right = right.substring(4);
+			if (lowerRight.startsWith("get ")) right = right.substring(4);
 			String lowerLeft = left.toLowerCase();
 			if (lowerLeft.endsWith("trade ")) left = left.substring(0, left.length() - 6);
+			if (lowerLeft.endsWith("give ")) left = left.substring(0, left.length() - 5);
+			if (lowerLeft.endsWith("bring ")) left = left.substring(0, left.length() - 6);
 		}
 		List<ItemCatalog.MatchedItem> gives = ItemCatalog.findAllInText(left, english);
 		List<ItemCatalog.MatchedItem> takes = ItemCatalog.findAllInText(right, english);

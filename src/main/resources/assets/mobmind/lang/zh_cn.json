@@ -29,6 +29,7 @@
   "gui.mobmind.config.toggle.ttsEnabled": "生物语音合成",
   "gui.mobmind.config.toggle.greetingEnabled": "生物主动打招呼",
   "gui.mobmind.config.toggle.offlineFallback": "离线兜底回复",
+  "gui.mobmind.config.toggle.creativeTauntEnabled": "创造模式嘲讽",
   "gui.mobmind.config.button.save": "保存",
   "gui.mobmind.config.button.cancel": "取消",
   "gui.mobmind.config.mic.default": "系统默认",

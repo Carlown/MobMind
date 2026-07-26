@@ -2,6 +2,7 @@ package com.mobmind.behavior;
 
 import com.mobmind.ai.MobAiService;
 import com.mobmind.persona.PersonaRegistry;
+import com.mobmind.persona.PersonalityGenerator;
 import com.mobmind.state.MobMindState;
 import com.mobmind.util.FoodValues;
 import net.minecraft.server.MinecraftServer;
@@ -45,7 +46,7 @@ public final class GiftActions {
 				// 这些物品正在履行以物易物约定，不要当礼物吃掉
 				if (BarterActions.isBarterItemForPlayer(player, ie.getItem().getItem())) continue;
 
-				Mob mob = findNearbyFriendlyMob(level, ie, player, gameTime);
+				Mob mob = findNearbyGiftRecipient(level, ie, player, gameTime);
 				if (mob == null) continue;
 				if (MobMindState.hasActiveBarterDeal(mob, player.getUUID())) continue;
 
@@ -69,13 +70,18 @@ public final class GiftActions {
 		}
 	}
 
-	private static Mob findNearbyFriendlyMob(ServerLevel level, ItemEntity ie, ServerPlayer player, long gameTime) {
-		List<Mob> nearby = level.getEntitiesOfClass(Mob.class, ie.getBoundingBox().inflate(2.0),
+	private static Mob findNearbyGiftRecipient(ServerLevel level, ItemEntity ie, ServerPlayer player, long gameTime) {
+		List<Mob> nearby = level.getEntitiesOfClass(Mob.class, ie.getBoundingBox().inflate(4.0),
 				m -> m.isAlive()
 						&& PersonaRegistry.supports(m)
+						&& !MobMindState.isProvokedTowards(m, player.getUUID(), gameTime)
 						&& (MobMindState.isFriendlyTo(m, player.getUUID())
-								|| MobMindState.isCalmedTowards(m, player.getUUID(), gameTime)));
-		if (nearby.isEmpty()) return null;
+								|| MobMindState.isCalmedTowards(m, player.getUUID(), gameTime)
+								|| MobMindState.categoryOf(m) != PersonalityGenerator.Category.HOSTILE));
+		if (nearby.isEmpty()) {
+			com.mobmind.MobMindMod.LOGGER.debug("[MobMind] gift 附近无合适生物: item={}", ie.getItem());
+			return null;
+		}
 		nearby.sort(java.util.Comparator.comparingDouble(m -> m.distanceToSqr(ie)));
 		return nearby.get(0);
 	}
@@ -84,7 +90,15 @@ public final class GiftActions {
 		var equippable = stack.get(net.minecraft.core.component.DataComponents.EQUIPPABLE);
 		if (equippable == null) return false;
 		EquipmentSlot slot = equippable.slot();
+		com.mobmind.MobMindMod.LOGGER.info("[MobMind] tryEquipArmor: mob={} item={} slot={} type={}",
+				mob.getType().getDescription().getString(), stack.getItem(), slot, slot.getType());
 		if (slot.getType() != EquipmentSlot.Type.HUMANOID_ARMOR) return false;
+		// 南瓜/雕刻南瓜/南瓜灯只做交易/礼物，不要自动戴头上
+		if (stack.is(net.minecraft.world.item.Items.PUMPKIN)
+				|| stack.is(net.minecraft.world.item.Items.CARVED_PUMPKIN)
+				|| stack.is(net.minecraft.world.item.Items.JACK_O_LANTERN)) {
+			return false;
+		}
 		if (mob.getItemBySlot(slot).getItem() == stack.getItem()) return false;
 
 		ItemStack old = mob.getItemBySlot(slot);
@@ -117,7 +131,17 @@ public final class GiftActions {
 	}
 
 	private static void acceptGift(Mob mob, ServerPlayer player, ItemStack stack, ItemEntity ie) {
-		ie.discard();
+		// 村民等拥有背包的生物：把礼物放进背包，这样也能用于后续交易交付
+		if (mob instanceof net.minecraft.world.entity.npc.InventoryCarrier carrier) {
+			net.minecraft.world.item.ItemStack remaining = carrier.getInventory().addItem(stack.copy());
+			if (remaining.isEmpty()) {
+				ie.discard();
+			} else {
+				ie.setItem(remaining);
+			}
+		} else {
+			ie.discard();
+		}
 		MobMindState.adjustFriendship(mob, player.getUUID(), 5);
 		MobAiService.onGiftReceived(mob, player, stack.getHoverName().getString(), stack.getCount());
 	}

@@ -4,10 +4,12 @@ import com.mobmind.ai.MobAiService;
 import com.mobmind.behavior.BarterActions;
 import com.mobmind.behavior.BedGuard;
 import com.mobmind.behavior.GiftActions;
+import com.mobmind.behavior.TntFear;
 import com.mobmind.config.MobMindConfig;
 import com.mobmind.net.MobPackets;
 import com.mobmind.state.MobMindState;
 import net.fabricmc.api.ModInitializer;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.world.InteractionResult;
@@ -27,6 +29,7 @@ public class MobMindMod implements ModInitializer {
 	private int bedCounter = 0;
 	private int foodRequestCounter = 0;
 	private int giftCounter = 0;
+	private int tntCounter = 0;
 
 	@Override
 	public void onInitialize() {
@@ -60,6 +63,12 @@ public class MobMindMod implements ModInitializer {
 			if (equippable != null && com.mobmind.persona.PersonaRegistry.supports(mob)) {
 				var slot = equippable.slot();
 				if (slot.getType() == net.minecraft.world.entity.EquipmentSlot.Type.HUMANOID_ARMOR) {
+					// 南瓜类只做交易/礼物，不要自动戴头上
+					if (stack.is(net.minecraft.world.item.Items.PUMPKIN)
+							|| stack.is(net.minecraft.world.item.Items.CARVED_PUMPKIN)
+							|| stack.is(net.minecraft.world.item.Items.JACK_O_LANTERN)) {
+						return InteractionResult.PASS;
+					}
 					if (mob.getItemBySlot(slot).getItem() == stack.getItem()) return InteractionResult.PASS;
 					net.minecraft.world.item.ItemStack old = mob.getItemBySlot(slot);
 					mob.setItemSlot(slot, stack.copyWithCount(1));
@@ -105,8 +114,17 @@ public class MobMindMod implements ModInitializer {
 			MobMindState.clear();
 		});
 
+		// 已建立友好关系的生物重新加载时恢复不消失标记
+		ServerEntityEvents.ENTITY_LOAD.register((entity, world) -> {
+			if (entity instanceof Mob mob) {
+				MobMindState.ensurePersistenceIfFriendly(mob);
+			}
+		});
+
 		ServerTickEvents.END_SERVER_TICK.register(server -> {
 			MobMindState.tickGlow(server); // 清理说话高亮
+			MobMindState.tickBossCalm(server); // 强制安抚末影龙/凋灵
+			MobMindState.tickCuringZombieVillagers(server); // 治疗中僵尸村民帮助救助者
 			if (++saveCounter >= 6000) { // 每5分钟自动保存
 				saveCounter = 0;
 				MobMindState.save(server);
@@ -132,6 +150,10 @@ public class MobMindMod implements ModInitializer {
 			if (++giftCounter >= 10) { // 每0.5秒检查玩家扔给友好生物的礼物
 				giftCounter = 0;
 				GiftActions.tick(server);
+			}
+			if (++tntCounter >= 20) { // 每秒检查一次 TNT 恐惧
+				tntCounter = 0;
+				TntFear.tick(server);
 			}
 		});
 

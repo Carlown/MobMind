@@ -81,15 +81,27 @@ public class MobMindClient implements ClientModInitializer {
 				SherpaLocal.prewarm(MobMindConfig.get()));
 	}
 
+	/** 判断当前游戏界面语言是否为英文 */
+	private static boolean isEnglishUi() {
+		try {
+			String title = net.minecraft.locale.Language.getInstance().getOrDefault("gui.mobmind.config.title", "");
+			return title.endsWith("Settings");
+		} catch (Exception e) {
+			return false;
+		}
+	}
+
 	/** 生物语音播放：JNI 常驻优先，其次 exe，最后云端 API */
 	private static void playVoice(MobMindConfig cfg, MobPackets.ReplyPayload payload) {
 		String speechText = LocalVoice.cleanSpeechText(payload.text());
 		if (speechText.isEmpty()) return;
-		MobMindMod.LOGGER.info("[MobMind] 朗读准备: {}", speechText);
+		boolean english = isEnglishUi();
+		int voiceId = LocalVoice.voiceIdForLocale(payload.voiceId(), cfg, english);
+		MobMindMod.LOGGER.info("[MobMind] 朗读准备: {} voice={} english={}", speechText, voiceId, english);
 		if (LocalVoice.isTtsReady(cfg) && SherpaLocal.isTtsAvailable(cfg)) {
 			MobMindExecutor.runAsync(() -> {
 				long t0 = System.currentTimeMillis();
-				com.k2fsa.sherpa.onnx.GeneratedAudio audio = SherpaLocal.synth(cfg, payload.voiceId(), speechText);
+				com.k2fsa.sherpa.onnx.GeneratedAudio audio = SherpaLocal.synth(cfg, voiceId, speechText);
 				long synthMs = System.currentTimeMillis() - t0;
 				MobMindMod.LOGGER.info("[MobMind] 本地 TTS 合成 {}ms", synthMs);
 				if (audio != null && audio.getSamples().length > 0) {
@@ -100,7 +112,7 @@ public class MobMindClient implements ClientModInitializer {
 			MobMindExecutor.runAsync(() -> {
 				try {
 					long t0 = System.currentTimeMillis();
-					java.nio.file.Path wav = SherpaEngine.synthesize(cfg, payload.voiceId(), speechText);
+					java.nio.file.Path wav = SherpaEngine.synthesize(cfg, voiceId, speechText);
 					MobMindMod.LOGGER.info("[MobMind] exe TTS 合成 {}ms", System.currentTimeMillis() - t0);
 					if (wav != null) {
 						TtsPlayer.play(wav);

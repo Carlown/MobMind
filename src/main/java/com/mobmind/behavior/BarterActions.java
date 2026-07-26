@@ -12,9 +12,12 @@ import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.npc.InventoryCarrier;
 import net.minecraft.world.entity.npc.villager.AbstractVillager;
+import net.minecraft.core.component.DataComponents;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.item.alchemy.PotionContents;
+import net.minecraft.world.item.alchemy.Potions;
 import net.minecraft.world.item.trading.MerchantOffer;
 import net.minecraft.world.item.trading.MerchantOffers;
 import net.minecraft.world.InteractionHand;
@@ -95,37 +98,43 @@ public final class BarterActions {
 
 	/** 生物刚捡起一个掉落物时，立即尝试完成以物易物约定 */
 	public static void onMobPickedUp(Mob mob, ItemEntity itemEntity) {
-		if (!(itemEntity.getOwner() instanceof ServerPlayer player)) return;
-		UUID entityId = mob.getUUID();
-		MobMindState.BarterDeal deal = MobMindState.getBarterDeal(entityId);
-		if (deal == null || !deal.playerId().equals(player.getUUID())) return;
-		if (!mob.isAlive()) return;
-		long now = mob.level().getLevelData().getGameTime();
-		if (now > deal.expireGameTime()) {
-			MobMindState.clearBarterDeal(entityId);
-			return;
-		}
-		if (player.distanceTo(mob) > 16) return;
-		ServerLevel level = (ServerLevel) mob.level();
-		List<ItemEntity> nearby = level.getEntitiesOfClass(ItemEntity.class, mob.getBoundingBox().inflate(8.0));
-		if (!canFulfillTotal(mob, nearby, deal.gives())) return;
+		try {
+			if (!(itemEntity.getOwner() instanceof ServerPlayer player)) return;
+			UUID entityId = mob.getUUID();
+			MobMindState.BarterDeal deal = MobMindState.getBarterDeal(entityId);
+			com.mobmind.MobMindMod.LOGGER.info("[MobMind] onMobPickedUp: mob={} item={} deal={}",
+					mob.getType().getDescription().getString(), itemEntity.getItem(), deal != null);
+			if (deal == null || !deal.playerId().equals(player.getUUID())) return;
+			if (!mob.isAlive()) return;
+			long now = mob.level().getLevelData().getGameTime();
+			if (now > deal.expireGameTime()) {
+				MobMindState.clearBarterDeal(entityId);
+				return;
+			}
+			if (player.distanceTo(mob) > 16) return;
+			ServerLevel level = (ServerLevel) mob.level();
+			List<ItemEntity> nearby = level.getEntitiesOfClass(ItemEntity.class, mob.getBoundingBox().inflate(8.0));
+			boolean canFulfill = canFulfillTotal(mob, nearby, deal.gives());
+			com.mobmind.MobMindMod.LOGGER.info("[MobMind] onMobPickedUp canFulfill={} gives={}", canFulfill, deal.gives());
+			if (!canFulfill) return;
 
-		consumeTotal(mob, nearby, deal.gives());
-		MobMindState.clearBarterDeal(entityId);
-		MobMindState.clearOrder(mob);
-		MobMindState.adjustFriendship(mob, player.getUUID(), 18);
-		MobMindState.calm(mob, player.getUUID(), now + 12000);
-		for (MobMindState.BarterDeal.ItemRequirement take : deal.takes()) {
-			ItemStack reward = new ItemStack(take.item(), take.count());
-			ItemEntity drop = new ItemEntity(level, mob.getX(), mob.getY() + 0.5, mob.getZ(), reward);
-			drop.setThrower(mob);
-			level.addFreshEntity(drop);
+			consumeTotal(mob, nearby, deal.gives());
+			MobMindState.clearBarterDeal(entityId);
+			MobMindState.clearOrder(mob);
+			MobMindState.adjustFriendship(mob, player.getUUID(), 18);
+			MobMindState.calm(mob, player.getUUID(), now + 12000);
+			for (MobMindState.BarterDeal.ItemRequirement take : deal.takes()) {
+				ItemStack reward = rewardStack(take);
+				dropRewardToPlayer(level, player, mob, reward);
+			}
+			String giveDesc = describe(deal.gives());
+			String takeDesc = describe(deal.takes());
+			com.mobmind.MobMindMod.LOGGER.info("[MobMind] 以物易物交付(捡起触发): {} ↔ {}", giveDesc, takeDesc);
+			MobAiService.notifyBarterCompleted(player, mob, giveDesc, takeDesc);
+			// 以物易物不属于砍价，不触发砍价成就
+		} catch (Exception ex) {
+			com.mobmind.MobMindMod.LOGGER.warn("[MobMind] onMobPickedUp 异常", ex);
 		}
-		String giveDesc = describe(deal.gives());
-		String takeDesc = describe(deal.takes());
-		com.mobmind.MobMindMod.LOGGER.info("[MobMind] 以物易物交付(捡起触发): {} ↔ {}", giveDesc, takeDesc);
-		MobAiService.notifyBarterCompleted(player, mob, giveDesc, takeDesc);
-		awardBargainAdvancement(player);
 	}
 
 	/** 判断某玩家当前是否有以物易物约定需要该物品 */
@@ -170,7 +179,8 @@ public final class BarterActions {
 		List<MobMindState.BarterDeal.ItemRequirement> reqs = new ArrayList<>();
 		for (ItemCatalog.MatchedItem m : list) {
 			if (m == null || m.item() == null || m.item() == Items.AIR) continue;
-			reqs.add(new MobMindState.BarterDeal.ItemRequirement(m.item(), Math.max(1, Math.min(64, m.count()))));
+			reqs.add(new MobMindState.BarterDeal.ItemRequirement(m.item(), Math.max(1, Math.min(64, m.count())),
+					ItemCatalog.potionForName(m.name())));
 		}
 		return reqs;
 	}
@@ -180,9 +190,24 @@ public final class BarterActions {
 		for (int i = 0; i < reqs.size(); i++) {
 			if (i > 0) sb.append("+");
 			MobMindState.BarterDeal.ItemRequirement r = reqs.get(i);
-			sb.append(new ItemStack(r.item(), r.count()).getHoverName().getString()).append("×").append(r.count());
+			sb.append(rewardStack(r).getHoverName().getString()).append("×").append(r.count());
 		}
 		return sb.toString();
+	}
+
+	/** 构造回赠物品栈；药水类会附加具体药效，避免给出水瓶 */
+	private static ItemStack rewardStack(MobMindState.BarterDeal.ItemRequirement req) {
+		ItemStack stack = new ItemStack(req.item(), req.count());
+		if (req.item() == Items.POTION || req.item() == Items.SPLASH_POTION || req.item() == Items.LINGERING_POTION) {
+			try {
+				net.minecraft.core.Holder<net.minecraft.world.item.alchemy.Potion> potion = req.potion() != null ? req.potion() : Potions.HEALING;
+				com.mobmind.MobMindMod.LOGGER.info("[MobMind] rewardStack potion: {} -> {}", req.item(), potion);
+				stack.set(DataComponents.POTION_CONTENTS, new PotionContents(potion));
+			} catch (Exception e) {
+				com.mobmind.MobMindMod.LOGGER.warn("[MobMind] 药水 NBT 设置失败: {}", e.getMessage());
+			}
+		}
+		return stack;
 	}
 
 	/** 每20tick扫描：玩家是否把约定物品扔到了生物身边 */
@@ -191,39 +216,44 @@ public final class BarterActions {
 		long now = server.overworld().getLevelData().getGameTime();
 		Iterator<Map.Entry<UUID, MobMindState.BarterDeal>> it = MobMindState.barterDealEntries();
 		while (it.hasNext()) {
-			Map.Entry<UUID, MobMindState.BarterDeal> e = it.next();
-			MobMindState.BarterDeal deal = e.getValue();
-			Mob mob = findMob(server, e.getKey());
-			if (mob == null || !mob.isAlive() || now > deal.expireGameTime()) {
+			try {
+				Map.Entry<UUID, MobMindState.BarterDeal> e = it.next();
+				MobMindState.BarterDeal deal = e.getValue();
+				Mob mob = findMob(server, e.getKey());
+				if (mob == null || !mob.isAlive() || now > deal.expireGameTime()) {
+					it.remove();
+					continue;
+				}
+				ServerPlayer player = server.getPlayerList().getPlayer(deal.playerId());
+				if (player == null || player.distanceTo(mob) > 16) continue;
+				ServerLevel level = (ServerLevel) mob.level();
+
+				// 玩家丢到生物附近的掉落物 + 生物自己捡起来的手持/背包物品都算交付
+				List<ItemEntity> nearby = level.getEntitiesOfClass(ItemEntity.class, mob.getBoundingBox().inflate(8.0));
+				boolean canFulfill = canFulfillTotal(mob, nearby, deal.gives());
+				com.mobmind.MobMindMod.LOGGER.info("[MobMind] tickDeals: mob={} canFulfill={} gives={} nearbyItems={}",
+					mob.getType().getDescription().getString(), canFulfill, deal.gives(), nearby.size());
+				if (!canFulfill) continue;
+
+				// 交付：先扣地面掉落物，不够再扣生物手持/背包
+				consumeTotal(mob, nearby, deal.gives());
 				it.remove();
-				continue;
+				MobMindState.clearOrder(mob);
+				MobMindState.adjustFriendship(mob, player.getUUID(), 18);
+				MobMindState.calm(mob, player.getUUID(), now + 12000); // 和解 10 分钟
+				for (MobMindState.BarterDeal.ItemRequirement take : deal.takes()) {
+					ItemStack reward = rewardStack(take);
+					dropRewardToPlayer(level, player, mob, reward);
+				}
+
+				String giveDesc = describe(deal.gives());
+				String takeDesc = describe(deal.takes());
+				com.mobmind.MobMindMod.LOGGER.info("[MobMind] 以物易物交付: {} ↔ {}", giveDesc, takeDesc);
+				MobAiService.notifyBarterCompleted(player, mob, giveDesc, takeDesc);
+				// 以物易物不属于砍价，不触发砍价成就
+			} catch (Exception ex) {
+				com.mobmind.MobMindMod.LOGGER.warn("[MobMind] tickDeals 异常", ex);
 			}
-			ServerPlayer player = server.getPlayerList().getPlayer(deal.playerId());
-			if (player == null || player.distanceTo(mob) > 16) continue;
-			ServerLevel level = (ServerLevel) mob.level();
-
-			// 玩家丢到生物附近的掉落物 + 生物自己捡起来的手持/背包物品都算交付
-			List<ItemEntity> nearby = level.getEntitiesOfClass(ItemEntity.class, mob.getBoundingBox().inflate(8.0));
-			if (!canFulfillTotal(mob, nearby, deal.gives())) continue;
-
-			// 交付：先扣地面掉落物，不够再扣生物手持/背包
-			consumeTotal(mob, nearby, deal.gives());
-			it.remove();
-			MobMindState.clearOrder(mob);
-			MobMindState.adjustFriendship(mob, player.getUUID(), 18);
-			MobMindState.calm(mob, player.getUUID(), now + 12000); // 和解 10 分钟
-			for (MobMindState.BarterDeal.ItemRequirement take : deal.takes()) {
-				ItemStack reward = new ItemStack(take.item(), take.count());
-				ItemEntity drop = new ItemEntity(level, mob.getX(), mob.getY() + 0.5, mob.getZ(), reward);
-				drop.setThrower(mob);
-				level.addFreshEntity(drop);
-			}
-
-			String giveDesc = describe(deal.gives());
-			String takeDesc = describe(deal.takes());
-			com.mobmind.MobMindMod.LOGGER.info("[MobMind] 以物易物交付: {} ↔ {}", giveDesc, takeDesc);
-			MobAiService.notifyBarterCompleted(player, mob, giveDesc, takeDesc);
-			awardBargainAdvancement(player);
 		}
 	}
 
@@ -280,8 +310,26 @@ public final class BarterActions {
 			if (remaining <= 0) continue;
 			// 3) 生物背包
 			if (mob instanceof InventoryCarrier carrier) {
-				carrier.getInventory().removeItemType(req.item(), remaining);
+				net.minecraft.world.SimpleContainer inv = carrier.getInventory();
+				for (int i = 0; i < inv.getContainerSize() && remaining > 0; i++) {
+					ItemStack stack = inv.getItem(i);
+					if (!stack.is(req.item())) continue;
+					int take = Math.min(remaining, stack.getCount());
+					stack.shrink(take);
+					if (stack.isEmpty()) inv.setItem(i, ItemStack.EMPTY);
+					remaining -= take;
+				}
 			}
+		}
+	}
+
+	/** 把回赠物品交给玩家；背包满则丢在玩家脚边，并设短延迟防止村民等生物抢回去 */
+	private static void dropRewardToPlayer(ServerLevel level, ServerPlayer player, Mob mob, ItemStack reward) {
+		if (!player.addItem(reward.copy())) {
+			ItemEntity drop = new ItemEntity(level, player.getX(), player.getY() + 0.3, player.getZ(), reward);
+			drop.setThrower(mob);
+			drop.setPickUpDelay(20);
+			level.addFreshEntity(drop);
 		}
 	}
 

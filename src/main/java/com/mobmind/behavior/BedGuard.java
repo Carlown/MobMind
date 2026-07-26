@@ -69,8 +69,15 @@ public final class BedGuard {
 			for (Villager v : player.level().getEntitiesOfClass(Villager.class,
 					player.getBoundingBox().inflate(16), Entity::isAlive)) {
 				nearby++;
-				if (!PersonaRegistry.supports(v)) continue;
-				if (!isHisBed(v, bedPos)) continue;
+				if (!PersonaRegistry.supports(v)) {
+					MobMindMod.LOGGER.info("[MobMind] 村民 {} 不支持 AI", v.getUUID());
+					continue;
+				}
+				boolean hisBed = isHisBed(v, bedPos);
+				MobMindMod.LOGGER.info("[MobMind] 村民 {} isHisBed={} sleepingPos={} home={}",
+						v.getUUID(), hisBed, v.getSleepingPos(),
+						v.getBrain().getMemory(MemoryModuleType.HOME).map(GlobalPos::toString).orElse("null"));
+				if (!hisBed) continue;
 				matched = true;
 
 				Long last = LAST_SCOLD.get(v.getUUID());
@@ -117,11 +124,22 @@ public final class BedGuard {
 		}
 	}
 
-	/** 村民的床：正在睡这张，或认领（HOME）的是这张 */
+	/** 村民的床：正在睡这张，或认领（HOME）的是这张；
+	 *  兜底：村民附近 8 格内只有这一张床且他当前没睡别的床，也视为他认领的床 */
 	private static boolean isHisBed(Villager v, BlockPos bedPos) {
 		if (v.isSleeping() && v.getSleepingPos().map(bedPos::equals).orElse(false)) return true;
 		Optional<GlobalPos> home = v.getBrain().getMemory(MemoryModuleType.HOME);
-		return home.isPresent() && home.get().pos().equals(bedPos);
+		if (home.isPresent() && home.get().pos().equals(bedPos)) return true;
+		if (v.isSleeping()) return false; // 正睡别的床，不是这张
+		// 兜底：附近 8 格内只有这一张床
+		int bedCount = 0;
+		for (BlockPos pos : BlockPos.betweenClosed(bedPos.offset(-8, -4, -8), bedPos.offset(8, 4, 8))) {
+			if (v.level().getBlockState(pos).getBlock() instanceof BedBlock) {
+				bedCount++;
+				if (bedCount > 1) break;
+			}
+		}
+		return bedCount == 1;
 	}
 
 	/** 6秒后玩家仍赖在床上：赶或不赶 */

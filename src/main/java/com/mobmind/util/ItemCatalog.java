@@ -22,6 +22,8 @@ public final class ItemCatalog {
 	private static final com.google.gson.Gson GSON = new com.google.gson.Gson();
 	private static volatile Map<String, Item> BY_ZH;
 	private static volatile Map<String, Item> BY_EN;
+	/** 中文药水名 -> Potion Holder（由 items_zh.json 的 .effect.xxx 后缀解析） */
+	private static volatile Map<String, net.minecraft.core.Holder<net.minecraft.world.item.alchemy.Potion>> POTION_BY_ZH;
 
 	private ItemCatalog() {}
 
@@ -191,6 +193,12 @@ public final class ItemCatalog {
 		return bestEn != null ? en.get(bestEn) : null;
 	}
 
+	/** 按中文药水名取对应 Potion Holder（如“伤害药水”-> Harming），非药水返回 null */
+	public static net.minecraft.core.Holder<net.minecraft.world.item.alchemy.Potion> potionForName(String name) {
+		if (name == null || POTION_BY_ZH == null) return null;
+		return POTION_BY_ZH.get(name);
+	}
+
 	private static Map<String, Item> zh() {
 		if (BY_ZH == null) {
 			synchronized (ItemCatalog.class) {
@@ -201,11 +209,26 @@ public final class ItemCatalog {
 							Map<String, String> names = GSON.fromJson(
 									new String(in.readAllBytes(), StandardCharsets.UTF_8),
 									new TypeToken<Map<String, String>>() {}.getType());
+							Map<String, net.minecraft.core.Holder<net.minecraft.world.item.alchemy.Potion>> potionMap = new HashMap<>();
 							names.forEach((zhName, id) -> {
-								Item item = BuiltInRegistries.ITEM.getValue(Identifier.parse(id));
+								// items_zh.json 把药水类翻译键误带成了 minecraft:potion.effect.xxx，
+								// 实际注册 ID 是 minecraft:potion / splash_potion / lingering_potion / tipped_arrow
+								String normalizedId = id;
+								int effectIdx = normalizedId.indexOf(".effect.");
+								if (effectIdx > 0) {
+									String effectId = normalizedId.substring(effectIdx + ".effect.".length());
+									if (!effectId.isEmpty()) {
+										net.minecraft.world.item.alchemy.Potion potion = BuiltInRegistries.POTION
+														.getValue(Identifier.parse("minecraft:" + effectId));
+												if (potion != null) potionMap.put(zhName, BuiltInRegistries.POTION.wrapAsHolder(potion));
+									}
+									normalizedId = normalizedId.substring(0, effectIdx);
+								}
+								Item item = BuiltInRegistries.ITEM.getValue(Identifier.parse(normalizedId));
 								if (item != null) map.put(zhName, item);
 							});
-							MobMindMod.LOGGER.info("[MobMind] 物品中文名目录已加载: {} 条", map.size());
+							POTION_BY_ZH = potionMap;
+							MobMindMod.LOGGER.info("[MobMind] 物品中文名目录已加载: {} 条, 药水效果 {} 条", map.size(), potionMap.size());
 						}
 					} catch (Exception e) {
 						MobMindMod.LOGGER.warn("[MobMind] 物品中文名目录加载失败: {}", e.getMessage());

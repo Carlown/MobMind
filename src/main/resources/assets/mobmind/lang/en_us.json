@@ -29,6 +29,7 @@
   "gui.mobmind.config.toggle.ttsEnabled": "Mob Voice Synthesis",
   "gui.mobmind.config.toggle.greetingEnabled": "Mob Greetings",
   "gui.mobmind.config.toggle.offlineFallback": "Offline Fallback Replies",
+  "gui.mobmind.config.toggle.creativeTauntEnabled": "Creative Mode Taunts",
   "gui.mobmind.config.button.save": "Save",
   "gui.mobmind.config.button.cancel": "Cancel",
   "gui.mobmind.config.mic.default": "System Default",

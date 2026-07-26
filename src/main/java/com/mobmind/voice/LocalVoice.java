@@ -195,6 +195,20 @@ public final class LocalVoice {
 		return pool[new Random().nextInt(pool.length)];
 	}
 
+	/**
+	 * 根据当前游戏语言调整实际播放音色。
+	 * 英文模式下，若使用默认中文池（45-52）且用户未强制/自定义，则映射到英文音色（0-7）。
+	 */
+	public static int voiceIdForLocale(int voiceId, MobMindConfig cfg, boolean english) {
+		if (!english) return voiceId;
+		if (cfg.forceTtsVoiceId >= 0) return voiceId; // 用户强制，不覆盖
+		if (cfg.ttsVoicePool != null && !cfg.ttsVoicePool.isBlank()) return voiceId; // 自定义池，不覆盖
+		if (voiceId >= 45 && voiceId <= 52) {
+			return (voiceId - 45) % 44; // kokoro 英文音色 0-43
+		}
+		return voiceId;
+	}
+
 	/** 清洗 SenseVoice 输出中的富文本标签，如 <|zh|><|HAPPY|> */
 	public static String sanitizeTranscript(String text) {
 		if (text == null) return "";

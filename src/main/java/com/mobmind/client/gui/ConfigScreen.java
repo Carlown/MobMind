@@ -55,7 +55,7 @@ public class ConfigScreen extends Screen {
 		microphones.addAll(MicCapture.listMicrophones());
 		if (microphones.isEmpty()) microphones.add(Component.translatable("gui.mobmind.config.mic.default").getString());
 
-		bottom = this.height - 115;
+		bottom = this.height - 130;
 		scrollY = 0;
 
 		// 两栏宽度自适应，小屏幕下自动压缩，确保左侧不被裁掉
@@ -114,14 +114,15 @@ public class ConfigScreen extends Screen {
 		contentBottom = y + 24;
 
 		// 开关（底部固定，不滚动）
-		int ty = this.height - 95;
-		addToggle(lx1, ty, "gui.mobmind.config.toggle.voiceEnabled", () -> cfg.voiceEnabled, v -> cfg.voiceEnabled = v);
-		addToggle(lx2, ty, "gui.mobmind.config.toggle.ttsEnabled", () -> cfg.ttsEnabled, v -> cfg.ttsEnabled = v);
-		addToggle(lx1, ty + 25, "gui.mobmind.config.toggle.greetingEnabled", () -> cfg.greetingEnabled, v -> cfg.greetingEnabled = v);
-		addToggle(lx2, ty + 25, "gui.mobmind.config.toggle.offlineFallback", () -> cfg.offlineFallback, v -> cfg.offlineFallback = v);
+		int ty = this.height - 120;
+		addToggle(lx1, ty, colW, "gui.mobmind.config.toggle.voiceEnabled", () -> cfg.voiceEnabled, v -> cfg.voiceEnabled = v);
+		addToggle(lx2, ty, colW, "gui.mobmind.config.toggle.ttsEnabled", () -> cfg.ttsEnabled, v -> cfg.ttsEnabled = v);
+		addToggle(lx1, ty + 25, colW, "gui.mobmind.config.toggle.greetingEnabled", () -> cfg.greetingEnabled, v -> cfg.greetingEnabled = v);
+		addToggle(lx2, ty + 25, colW, "gui.mobmind.config.toggle.offlineFallback", () -> cfg.offlineFallback, v -> cfg.offlineFallback = v);
+		addToggle(lx1, ty + 50, colW, "gui.mobmind.config.toggle.creativeTauntEnabled", () -> cfg.creativeTauntEnabled, v -> cfg.creativeTauntEnabled = v);
 
 		// 保存/取消按钮固定在最下方
-		int btnY = this.height - 42;
+		int btnY = this.height - 35;
 		saveButton = Button.builder(Component.translatable("gui.mobmind.config.button.save"), b -> {
 			MobMindConfig.save();
 			this.onClose();
@@ -197,13 +198,13 @@ public class ConfigScreen extends Screen {
 		return name;
 	}
 
-	private void addToggle(int x, int y, String labelKey, Supplier<Boolean> getter, Consumer<Boolean> setter) {
+	private void addToggle(int x, int y, int w, String labelKey, Supplier<Boolean> getter, Consumer<Boolean> setter) {
 		Button btn = Button.builder(
 				Component.translatable(labelKey).append(": ").append(toggleText(getter.get())),
 				b -> {
 					setter.accept(!getter.get());
 					b.setMessage(Component.translatable(labelKey).append(": ").append(toggleText(getter.get())));
-				}).bounds(x, y, 210, 20).build();
+				}).bounds(x, y, w, 20).build();
 		this.addRenderableWidget(btn);
 	}
 
