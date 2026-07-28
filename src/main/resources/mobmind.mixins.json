@@ -3,12 +3,16 @@
   "package": "com.mobmind.mixin",
   "mixins": [
     "MobMixin",
+    "MobTransformationMixin",
     "LivingEntityMixin",
     "ZombieVillagerMixin",
     "PiglinMixin",
     "PiglinAiMixin",
     "EndCrystalMixin",
-    "EnderDragonFightMixin"
+    "EndermanMixin",
+    "EnderDragonFightMixin",
+    "MeleeAttackGoalMixin",
+    "RangedBowAttackGoalMixin"
   ],
   "injectors": {
     "defaultRequire": 1

@@ -28,6 +28,7 @@ public class ConfigScreen extends Screen {
 	private final List<Scrollable> scrollables = new ArrayList<>();
 	private final List<Renderable> scrollRenderables = new ArrayList<>();
 	private final List<String> microphones = new ArrayList<>();
+	private final List<Button> toggleButtons = new ArrayList<>();
 	private Button saveButton;
 	private Button cancelButton;
 
@@ -35,13 +36,11 @@ public class ConfigScreen extends Screen {
 	private int contentBottom = 0;
 	private final int top = 40;
 	private int bottom;
-	private final int scrollbarX;
 	private final int scrollbarW = 8;
 
 	public ConfigScreen(Screen parent) {
 		super(Component.translatable("gui.mobmind.config.title"));
 		this.parent = parent;
-		this.scrollbarX = 0; // init 中根据屏幕宽度重新计算
 	}
 
 	@Override
@@ -51,24 +50,24 @@ public class ConfigScreen extends Screen {
 		scrollables.clear();
 		scrollRenderables.clear();
 		microphones.clear();
+		toggleButtons.clear();
 		this.clearWidgets();
 		microphones.addAll(MicCapture.listMicrophones());
 		if (microphones.isEmpty()) microphones.add(Component.translatable("gui.mobmind.config.mic.default").getString());
 
-		bottom = this.height - 130;
+		bottom = this.height - 45;
 		scrollY = 0;
 
-		// 两栏宽度自适应，小屏幕下自动压缩，确保左侧不被裁掉
-		int colW = Math.min(210, (this.width - 52) / 2);
-		int gap = Math.max(16, (this.width - colW * 2) / 8);
-		int lx1 = Math.max(10, this.width / 2 - colW - gap);
-		int lx2 = Math.min(this.width - colW - 10, this.width / 2 + gap);
-		int y = top + 12;
+		int colW = Math.min(220, (this.width - 60) / 2);
+		int gap = 20;
+		int totalW = colW * 2 + gap;
+		int lx1 = Math.max(10, (this.width - totalW) / 2);
+		int lx2 = lx1 + colW + gap;
+		int y = top + 8;
 
-		addSectionTitle(lx1, top, "gui.mobmind.config.section.api");
-		addSectionTitle(lx2, top, "gui.mobmind.config.section.local");
-
-		// 左栏：云端 API
+		// === 左栏：云端 API ===
+		addSectionTitle(lx1, y, "gui.mobmind.config.section.api");
+		y += 16;
 		y = addRow(lx1, colW, y, "gui.mobmind.config.label.apiEndpoint", cfg.apiEndpoint, v -> cfg.apiEndpoint = v);
 		y = addRow(lx1, colW, y, "gui.mobmind.config.label.apiKey", cfg.apiKey, v -> cfg.apiKey = v, true, null);
 		y = addRow(lx1, colW, y, "gui.mobmind.config.label.chatModel", cfg.chatModel, v -> cfg.chatModel = v);
@@ -79,25 +78,55 @@ public class ConfigScreen extends Screen {
 		y = addRow(lx1, colW, y, "gui.mobmind.config.label.interactRadius", String.valueOf(cfg.interactRadius),
 				v -> cfg.interactRadius = parseInt(v, cfg.interactRadius));
 
-		// 右栏：本地语音引擎
-		y = top + 12;
-		y = addRow(lx2, colW, y, "gui.mobmind.config.label.voiceEngineDir", cfg.voiceEngineDir, v -> cfg.voiceEngineDir = v, false, "gui.mobmind.config.hint.voiceEngineDir");
-		y = addRow(lx2, colW, y, "gui.mobmind.config.label.sttModelDir", cfg.sttModelDir, v -> cfg.sttModelDir = v, false, "gui.mobmind.config.hint.sttModelDir");
-		y = addRow(lx2, colW, y, "gui.mobmind.config.label.ttsModelDir", cfg.ttsModelDir, v -> cfg.ttsModelDir = v, false, "gui.mobmind.config.hint.ttsModelDir");
-		y = addRow(lx2, colW, y, "gui.mobmind.config.label.ttsVoicePool", cfg.ttsVoicePool, v -> cfg.ttsVoicePool = v, false, "gui.mobmind.config.hint.ttsVoicePool");
-		y = addRow(lx2, colW, y, "gui.mobmind.config.label.ttsVoiceCount", String.valueOf(cfg.ttsVoiceCount),
+		// === 右栏：本地语音引擎 ===
+		int ry = top + 8;
+		addSectionTitle(lx2, ry, "gui.mobmind.config.section.local");
+		ry += 16;
+		ry = addRow(lx2, colW, ry, "gui.mobmind.config.label.voiceEngineDir", cfg.voiceEngineDir, v -> cfg.voiceEngineDir = v, false, "gui.mobmind.config.hint.voiceEngineDir");
+		ry = addRow(lx2, colW, ry, "gui.mobmind.config.label.sttModelDir", cfg.sttModelDir, v -> cfg.sttModelDir = v, false, "gui.mobmind.config.hint.sttModelDir");
+		ry = addRow(lx2, colW, ry, "gui.mobmind.config.label.ttsModelDir", cfg.ttsModelDir, v -> cfg.ttsModelDir = v, false, "gui.mobmind.config.hint.ttsModelDir");
+		ry = addRow(lx2, colW, ry, "gui.mobmind.config.label.ttsVoicePool", cfg.ttsVoicePool, v -> cfg.ttsVoicePool = v, false, "gui.mobmind.config.hint.ttsVoicePool");
+		ry = addRow(lx2, colW, ry, "gui.mobmind.config.label.ttsVoiceCount", String.valueOf(cfg.ttsVoiceCount),
 				v -> cfg.ttsVoiceCount = parseInt(v, cfg.ttsVoiceCount));
-		y = addRow(lx2, colW, y, "gui.mobmind.config.label.forceTtsVoiceId", String.valueOf(cfg.forceTtsVoiceId),
+		ry = addRow(lx2, colW, ry, "gui.mobmind.config.label.forceTtsVoiceId", String.valueOf(cfg.forceTtsVoiceId),
 				v -> cfg.forceTtsVoiceId = parseInt(v, cfg.forceTtsVoiceId));
-		y = addRow(lx2, colW, y, "gui.mobmind.config.label.ttsSpeed", String.valueOf(cfg.ttsSpeed),
+		ry = addRow(lx2, colW, ry, "gui.mobmind.config.label.ttsSpeed", String.valueOf(cfg.ttsSpeed),
 				v -> cfg.ttsSpeed = parseDouble(v, cfg.ttsSpeed));
-		y = addRow(lx2, colW, y, "gui.mobmind.config.label.voiceThreads", String.valueOf(cfg.voiceThreads),
+		ry = addRow(lx2, colW, ry, "gui.mobmind.config.label.voiceThreads", String.valueOf(cfg.voiceThreads),
 				v -> cfg.voiceThreads = parseInt(v, cfg.voiceThreads));
+		ry = addMicSelector(lx2, colW, ry, cfg);
 
-		// 麦克风选择（右栏）
-		y = addMicSelector(lx2, colW, y, cfg);
+		// 两栏高度取最大值
+		y = Math.max(y, ry) + 12;
 
-		// 状态提示：放在内容底部，横跨两栏居中
+		// === 行为设置（横跨两栏）===
+		int fullW = colW * 2 + gap;
+		int fx = lx1;
+		addSectionTitle(fx, y, "gui.mobmind.config.section.behavior");
+		y += 18;
+
+		// 开关：两列排列
+		int toggleH = 22;
+		int toggleGap = 4;
+		int toggleColW = (fullW - gap) / 2;
+		y = addToggleRow(fx, toggleColW, y, "gui.mobmind.config.toggle.voiceEnabled", () -> cfg.voiceEnabled, v -> cfg.voiceEnabled = v);
+		y = addToggleRow(fx + toggleColW + gap, toggleColW, y - toggleH - toggleGap, "gui.mobmind.config.toggle.ttsEnabled", () -> cfg.ttsEnabled, v -> cfg.ttsEnabled = v);
+		y += toggleGap;
+		y = addToggleRow(fx, toggleColW, y, "gui.mobmind.config.toggle.greetingEnabled", () -> cfg.greetingEnabled, v -> cfg.greetingEnabled = v);
+		y = addToggleRow(fx + toggleColW + gap, toggleColW, y - toggleH - toggleGap, "gui.mobmind.config.toggle.offlineFallback", () -> cfg.offlineFallback, v -> cfg.offlineFallback = v);
+		y += toggleGap;
+		y = addToggleRow(fx, toggleColW, y, "gui.mobmind.config.toggle.creativeTauntEnabled", () -> cfg.creativeTauntEnabled, v -> cfg.creativeTauntEnabled = v);
+		y += 12;
+
+		// 召唤数量输入框（左栏）+ 召唤村民开关（右栏，和输入框同一行）
+		int recallRowY = y;
+		y = addRow(fx, toggleColW, y, "gui.mobmind.config.label.recallCount", String.valueOf(cfg.recallCount),
+				v -> cfg.recallCount = parseInt(v, cfg.recallCount), false, "gui.mobmind.config.hint.recallCount");
+		// 召唤村民开关放在输入框右边，垂直居中对齐输入框（标签12px + 偏移2px）
+		addToggleRow(fx + toggleColW + gap, toggleColW, recallRowY + 14, "gui.mobmind.config.toggle.recallVillagers", () -> cfg.recallVillagers, v -> cfg.recallVillagers = v);
+		y += 8;
+
+		// 状态提示：居中
 		String sttState = LocalVoice.isSttReady(cfg)
 				? Component.translatable("gui.mobmind.config.status.sttReady").getString()
 				: Component.translatable("gui.mobmind.config.status.sttNotReady").getString();
@@ -108,21 +137,14 @@ public class ConfigScreen extends Screen {
 		} else {
 			ttsState = Component.translatable("gui.mobmind.config.status.ttsNotReady").getString();
 		}
-		StringWidget stateWidget = new StringWidget(Component.literal(sttState + "  " + ttsState), this.font);
-		stateWidget.setPosition(this.width / 2 - this.font.width(sttState + "  " + ttsState) / 2, y + 6);
+		String stateText = sttState + "  " + ttsState;
+		StringWidget stateWidget = new StringWidget(Component.literal(stateText), this.font);
+		stateWidget.setPosition(this.width / 2 - this.font.width(stateText) / 2, y);
 		addScrollable(stateWidget);
-		contentBottom = y + 24;
-
-		// 开关（底部固定，不滚动）
-		int ty = this.height - 120;
-		addToggle(lx1, ty, colW, "gui.mobmind.config.toggle.voiceEnabled", () -> cfg.voiceEnabled, v -> cfg.voiceEnabled = v);
-		addToggle(lx2, ty, colW, "gui.mobmind.config.toggle.ttsEnabled", () -> cfg.ttsEnabled, v -> cfg.ttsEnabled = v);
-		addToggle(lx1, ty + 25, colW, "gui.mobmind.config.toggle.greetingEnabled", () -> cfg.greetingEnabled, v -> cfg.greetingEnabled = v);
-		addToggle(lx2, ty + 25, colW, "gui.mobmind.config.toggle.offlineFallback", () -> cfg.offlineFallback, v -> cfg.offlineFallback = v);
-		addToggle(lx1, ty + 50, colW, "gui.mobmind.config.toggle.creativeTauntEnabled", () -> cfg.creativeTauntEnabled, v -> cfg.creativeTauntEnabled = v);
+		contentBottom = y + 20;
 
 		// 保存/取消按钮固定在最下方
-		int btnY = this.height - 35;
+		int btnY = this.height - 28;
 		saveButton = Button.builder(Component.translatable("gui.mobmind.config.button.save"), b -> {
 			MobMindConfig.save();
 			this.onClose();
@@ -136,7 +158,7 @@ public class ConfigScreen extends Screen {
 	}
 
 	private void addSectionTitle(int x, int y, String key) {
-		StringWidget widget = new StringWidget(Component.literal("§n").append(Component.translatable(key)), this.font);
+		StringWidget widget = new StringWidget(Component.literal("§n§l").append(Component.translatable(key)), this.font);
 		widget.setPosition(x, y);
 		addScrollable(widget);
 	}
@@ -150,7 +172,7 @@ public class ConfigScreen extends Screen {
 		widget.setPosition(x, y);
 		addScrollable(widget);
 
-		EditBox box = new EditBox(this.font, x, y + 12, w, 20, Component.translatable(labelKey));
+		EditBox box = new EditBox(this.font, x, y + 12, w, 18, Component.translatable(labelKey));
 		box.setMaxLength(512);
 		box.setValue(value == null ? "" : value);
 		if (hintKey != null) box.setHint(Component.translatable(hintKey));
@@ -161,7 +183,19 @@ public class ConfigScreen extends Screen {
 		box.setResponder(setter);
 		addScrollable(box);
 		fields.add(box);
-		return y + 36;
+		return y + 34;
+	}
+
+	private int addToggleRow(int x, int w, int y, String labelKey, Supplier<Boolean> getter, Consumer<Boolean> setter) {
+		Button btn = Button.builder(
+				Component.translatable(labelKey).append(": ").append(toggleText(getter.get())),
+				b -> {
+					setter.accept(!getter.get());
+					b.setMessage(Component.translatable(labelKey).append(": ").append(toggleText(getter.get())));
+				}).bounds(x, y, w, 20).build();
+		addScrollable(btn);
+		toggleButtons.add(btn);
+		return y + 24;
 	}
 
 	private int addMicSelector(int x, int w, int y, MobMindConfig cfg) {
@@ -175,10 +209,10 @@ public class ConfigScreen extends Screen {
 			cfg.micMixerName = microphones.get(idx);
 			VoiceManager.updateMicDevice(cfg.micMixerName);
 			b.setMessage(Component.literal(labelForMic(cfg.micMixerName)));
-		}).bounds(x, y + 12, w, 20).build();
+		}).bounds(x, y + 12, w, 18).build();
 		if (startIdx >= 0) cfg.micMixerName = microphones.get(startIdx);
 		addScrollable(btn);
-		return y + 36;
+		return y + 34;
 	}
 
 	private int micIndex(String name) {
@@ -196,16 +230,6 @@ public class ConfigScreen extends Screen {
 			return Component.translatable("gui.mobmind.config.mic.default").getString();
 		}
 		return name;
-	}
-
-	private void addToggle(int x, int y, int w, String labelKey, Supplier<Boolean> getter, Consumer<Boolean> setter) {
-		Button btn = Button.builder(
-				Component.translatable(labelKey).append(": ").append(toggleText(getter.get())),
-				b -> {
-					setter.accept(!getter.get());
-					b.setMessage(Component.translatable(labelKey).append(": ").append(toggleText(getter.get())));
-				}).bounds(x, y, w, 20).build();
-		this.addRenderableWidget(btn);
 	}
 
 	private Component toggleText(boolean on) {
@@ -230,7 +254,6 @@ public class ConfigScreen extends Screen {
 	public boolean mouseClicked(net.minecraft.client.input.MouseButtonEvent event, boolean doubleClick) {
 		boolean inScroll = event.y() >= top && event.y() <= bottom;
 		for (net.minecraft.client.gui.components.events.GuiEventListener child : this.children()) {
-			// 裁剪区域外的滚动控件不响应点击，避免挡住底部固定按钮
 			if (!inScroll && isScrollable(child)) continue;
 			if (child.mouseClicked(event, doubleClick)) {
 				this.setFocused(child);
@@ -259,20 +282,21 @@ public class ConfigScreen extends Screen {
 
 	@Override
 	public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta) {
-		// 裁剪中间可滚动区域
 		graphics.enableScissor(0, top, this.width, bottom);
 		for (Renderable r : scrollRenderables) {
 			r.extractRenderState(graphics, mouseX, mouseY, delta);
 		}
 		graphics.disableScissor();
 
-		// 标题固定
+		// 标题
 		graphics.centeredText(this.font, this.title, this.width / 2, 14, 0xFFFFFFFF);
 
-		// 底部固定按钮：交给父类渲染，这样悬停/点击状态会自动更新
+		// 分割线
+		graphics.fill(0, top - 4, this.width, top - 3, 0x55FFFFFF);
+		graphics.fill(0, bottom + 2, this.width, bottom + 3, 0x55FFFFFF);
+
 		super.extractRenderState(graphics, mouseX, mouseY, delta);
 
-		// 滚动条
 		renderScrollbar(graphics);
 	}
 
@@ -286,9 +310,7 @@ public class ConfigScreen extends Screen {
 		int thumbHeight = Math.max(24, trackHeight * trackHeight / (trackHeight + maxScroll));
 		int thumbY = trackTop + (int) ((-scrollY) * (trackHeight - thumbHeight) / maxScroll);
 
-		// 轨道
 		graphics.fill(sbX, trackTop, sbX + scrollbarW, trackTop + trackHeight, 0x55FFFFFF);
-		// 滑块
 		graphics.fill(sbX, thumbY, sbX + scrollbarW, thumbY + thumbHeight, 0xFFAAAAAA);
 	}
 

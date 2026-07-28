@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "equipment",
+  "key": {
+    "X": "minecraft:stick",
+    "Y": "minecraft:cobblestone"
+  },
+  "pattern": [
+    "  X",
+    " Y ",
+    "X  "
+  ],
+  "result": {
+    "count": 1,
+    "id": "mobmind:friend_selector"
+  }
+}

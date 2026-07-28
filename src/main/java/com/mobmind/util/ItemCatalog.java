@@ -24,6 +24,8 @@ public final class ItemCatalog {
 	private static volatile Map<String, Item> BY_EN;
 	/** 中文药水名 -> Potion Holder（由 items_zh.json 的 .effect.xxx 后缀解析） */
 	private static volatile Map<String, net.minecraft.core.Holder<net.minecraft.world.item.alchemy.Potion>> POTION_BY_ZH;
+	/** 英文药水名 -> Potion Holder */
+	private static volatile Map<String, net.minecraft.core.Holder<net.minecraft.world.item.alchemy.Potion>> POTION_BY_EN;
 
 	private ItemCatalog() {}
 
@@ -193,10 +195,49 @@ public final class ItemCatalog {
 		return bestEn != null ? en.get(bestEn) : null;
 	}
 
-	/** 按中文药水名取对应 Potion Holder（如“伤害药水”-> Harming），非药水返回 null */
+	/** 按药水名（中文或英文）取对应 Potion Holder，支持模糊匹配，非药水返回 null */
 	public static net.minecraft.core.Holder<net.minecraft.world.item.alchemy.Potion> potionForName(String name) {
-		if (name == null || POTION_BY_ZH == null) return null;
-		return POTION_BY_ZH.get(name);
+		if (name == null) return null;
+		zh(); // ensure POTION_BY_ZH is loaded
+		en(); // ensure POTION_BY_EN is loaded
+
+		String lowerName = name.toLowerCase().trim();
+
+		// 1. Exact match: Chinese
+		if (POTION_BY_ZH != null) {
+			var p = POTION_BY_ZH.get(name);
+			if (p != null) return p;
+		}
+		// 2. Exact match: English
+		if (POTION_BY_EN != null) {
+			var p = POTION_BY_EN.get(lowerName);
+			if (p != null) return p;
+		}
+
+		// 3. Fuzzy match: check if name contains any known potion keyword (both zh and en)
+		if (POTION_BY_ZH != null) {
+			String bestZh = null;
+			int bestZhLen = 0;
+			for (String key : POTION_BY_ZH.keySet()) {
+				if (name.contains(key) && key.length() > bestZhLen) {
+					bestZh = key;
+					bestZhLen = key.length();
+				}
+			}
+			if (bestZh != null) return POTION_BY_ZH.get(bestZh);
+		}
+		if (POTION_BY_EN != null) {
+			String bestEn = null;
+			int bestEnLen = 0;
+			for (String key : POTION_BY_EN.keySet()) {
+				if (lowerName.contains(key) && key.length() > bestEnLen) {
+					bestEn = key;
+					bestEnLen = key.length();
+				}
+			}
+			if (bestEn != null) return POTION_BY_EN.get(bestEn);
+		}
+		return null;
 	}
 
 	private static Map<String, Item> zh() {
@@ -250,6 +291,94 @@ public final class ItemCatalog {
 						if (!en.isEmpty()) map.putIfAbsent(en, item);
 					}
 					BY_EN = map;
+
+					// Build English potion name -> Potion Holder map
+					Map<String, net.minecraft.core.Holder<net.minecraft.world.item.alchemy.Potion>> enPotionMap = new HashMap<>();
+					// Common potion effect keywords -> potion registry names
+					String[][] potionKeywords = {
+						{"healing", "healing"},
+						{"harming", "harming"},
+						{"regeneration", "regeneration"},
+						{"swiftness", "swiftness"},
+						{"slowness", "slowness"},
+						{"strength", "strength"},
+						{"weakness", "weakness"},
+						{"poison", "poison"},
+						{"night vision", "night_vision"},
+						{"invisibility", "invisibility"},
+						{"fire resistance", "fire_resistance"},
+						{"water breathing", "water_breathing"},
+						{"leaping", "leaping"},
+						{"slow falling", "slow_falling"},
+						{"turtle master", "turtle_master"},
+						{"luck", "luck"},
+						{"decay", "decay"}, // Wither
+						{"weakness", "weakness"},
+						{"harm", "harming"},
+						{"damage", "harming"},
+						{"heal", "healing"},
+						{"health", "healing"},
+						{"regen", "regeneration"},
+						{"speed", "swiftness"},
+						{"jump", "leaping"},
+						{"fire resist", "fire_resistance"},
+						{"water breathe", "water_breathing"},
+						{"night", "night_vision"},
+						{"invisible", "invisibility"},
+						{"levitation", "levitation"},
+						{"glowing", "glowing"},
+						{"darkness", "darkness"},
+						{"blindness", "blindness"},
+						{"nausea", "confusion"},
+						{"mining fatigue", "mining_fatigue"},
+						{"haste", "haste"},
+						{"hunger", "hunger"},
+						{"absorption", "absorption"},
+						{"resistance", "resistance"},
+						{"instant health", "healing"},
+						{"instant damage", "harming"},
+					};
+					for (String[] kw : potionKeywords) {
+						String keyword = kw[0];
+						String potionId = kw[1];
+						// Try strong/long variants too
+						String[] variants = {"", "strong_", "long_"};
+						for (String variant : variants) {
+							String fullId = variant.isEmpty() ? potionId : variant + potionId;
+							net.minecraft.world.item.alchemy.Potion potion = BuiltInRegistries.POTION
+									.getValue(Identifier.parse("minecraft:" + fullId));
+							if (potion != null) {
+								String prefix = variant.equals("strong_") ? "strong " :
+												variant.equals("long_") ? "long " : "";
+								String key = prefix + keyword;
+								enPotionMap.putIfAbsent(key, BuiltInRegistries.POTION.wrapAsHolder(potion));
+								// Also add "potion of ..." variants
+								enPotionMap.putIfAbsent("potion of " + key, BuiltInRegistries.POTION.wrapAsHolder(potion));
+								enPotionMap.putIfAbsent("splash potion of " + key, BuiltInRegistries.POTION.wrapAsHolder(potion));
+								enPotionMap.putIfAbsent("lingering potion of " + key, BuiltInRegistries.POTION.wrapAsHolder(potion));
+								enPotionMap.putIfAbsent(key + " potion", BuiltInRegistries.POTION.wrapAsHolder(potion));
+							}
+						}
+					}
+					// Also add direct name matches for potion items themselves (water bottle, awkward potion, mundane potion)
+					String[][] specialPotions = {
+						{"water", "water"},
+						{"awkward", "awkward"},
+						{"mundane", "mundane"},
+						{"thick", "thick"},
+					};
+					for (String[] sp : specialPotions) {
+						net.minecraft.world.item.alchemy.Potion potion = BuiltInRegistries.POTION
+								.getValue(Identifier.parse("minecraft:" + sp[1]));
+						if (potion != null) {
+							String key = sp[0];
+							enPotionMap.putIfAbsent(key, BuiltInRegistries.POTION.wrapAsHolder(potion));
+							enPotionMap.putIfAbsent(key + " potion", BuiltInRegistries.POTION.wrapAsHolder(potion));
+							enPotionMap.putIfAbsent("potion of " + key, BuiltInRegistries.POTION.wrapAsHolder(potion));
+						}
+					}
+					POTION_BY_EN = enPotionMap;
+					MobMindMod.LOGGER.info("[MobMind] 英文物品目录已加载: {} 条, 英文药水效果 {} 条", map.size(), enPotionMap.size());
 				}
 			}
 		}

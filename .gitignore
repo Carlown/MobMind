@@ -44,5 +44,10 @@ run-client-log.txt
 mobmind_log*.txt
 
 # Crash / debug dumps
+crash-report/
+crash_report/
 _crash_extract/
 错误报告-*.zip
+
+# Extra changelog drafts
+CHANGELOG_*.md

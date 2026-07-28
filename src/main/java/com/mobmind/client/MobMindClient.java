@@ -25,6 +25,8 @@ public class MobMindClient implements ClientModInitializer {
 	private static KeyMapping micKey;
 	private static KeyMapping configKey;
 	private static boolean prevConfigDown;
+	private static boolean prevRecallDown;
+	private static boolean prevDismissDown;
 
 	@Override
 	public void onInitializeClient() {
@@ -60,6 +62,18 @@ public class MobMindClient implements ClientModInitializer {
 				mc.setScreenAndShow(new ConfigScreen(null));
 			}
 			prevConfigDown = kDown;
+			// Ctrl+Z 召唤所有友好生物到身边
+			boolean zDown = InputConstants.isKeyDown(mc.getWindow(), GLFW.GLFW_KEY_Z);
+			if (zDown && ctrl && !prevRecallDown && mc.player != null) {
+				ClientPlayNetworking.send(new MobPackets.RecallFriendsPayload());
+			}
+			prevRecallDown = zDown;
+			// Ctrl+X 送回召唤来的友好生物
+			boolean xDown = InputConstants.isKeyDown(mc.getWindow(), GLFW.GLFW_KEY_X);
+			if (xDown && ctrl && !prevDismissDown && mc.player != null) {
+				ClientPlayNetworking.send(new MobPackets.DismissFriendsPayload());
+			}
+			prevDismissDown = xDown;
 			// Ctrl+V 按住持续录音，松开发送
 			if (micKey.isDown() && ctrl) {
 				VoiceManager.holdStart(mc);
@@ -74,11 +88,30 @@ public class MobMindClient implements ClientModInitializer {
 			}
 		});
 
-		MobMindMod.LOGGER.info("[MobMind] 客户端已初始化 (V=切换录音 Ctrl+V=按住说话 Ctrl+K=设置)");
+		MobMindMod.LOGGER.info("[MobMind] 客户端已初始化 (V=切换录音 Ctrl+V=按住说话 Ctrl+K=设置 Ctrl+Z=召唤朋友 Ctrl+X=送回朋友)");
 
 		// 进入世界后后台预热本地语音模型，首次对话零等待
-		net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents.JOIN.register((handler, sender, client) ->
-				SherpaLocal.prewarm(MobMindConfig.get()));
+		net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
+			SherpaLocal.prewarm(MobMindConfig.get());
+			// 同步客户端语言设置到服务端
+			String langCode = getCurrentLanguageCode();
+			if (langCode != null) {
+				sender.sendPacket(new com.mobmind.net.MobPackets.LanguagePayload(langCode));
+			}
+		});
+	}
+
+	/** 获取当前游戏的语言代码（如 "en_us", "zh_cn"） */
+	private static String getCurrentLanguageCode() {
+		try {
+			net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+			if (mc != null && mc.getLanguageManager() != null) {
+				return mc.getLanguageManager().getSelected();
+			}
+		} catch (Exception e) {
+			MobMindMod.LOGGER.warn("[MobMind] 获取语言代码失败: {}", e.getMessage());
+		}
+		return null;
 	}
 
 	/** 判断当前游戏界面语言是否为英文 */

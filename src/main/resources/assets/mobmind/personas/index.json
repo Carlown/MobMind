@@ -46,6 +46,6 @@
   "strider":          { "entity": "minecraft:strider",          "goodPercent": 60, "goodLabel": "善良型（善良/可合作）", "evilLabel": "自私型（自私/危险）" },
   "witch":            { "entity": "minecraft:witch",            "goodPercent": 10, "goodLabel": "善良型（善良/可交流）", "evilLabel": "邪恶型（邪恶/危险）" },
   "liufangguai":      { "entity": "minecraft:sulfur_cube",      "goodPercent": 10, "goodLabel": "善良型（善良/可信）", "evilLabel": "普通型（中立偏自私）" },
-  "copper_golem":     { "entity": "minecraft:copper_golem",     "goodPercent": 70, "goodLabel": "善良型（善良/助手）", "evilLabel": "固执型（固执/失控）" },
-  "charred_skeleton": { "entity": "minecraft:charred_skeleton", "goodPercent": 10, "goodLabel": "善良型（善良/可交流）", "evilLabel": "邪恶型（邪恶/危险）" }
+  "copper_golem":     { "entity": "minecraft:copper_golem",     "goodPercent": 70, "goodLabel": "忠诚型（忠诚/服从）", "evilLabel": "独立型（独立/自主）" },
+  "parched":          { "entity": "minecraft:parched",          "goodPercent": 10, "goodLabel": "善良型（善良/可交流）", "evilLabel": "邪恶型（邪恶/危险）" }
 }

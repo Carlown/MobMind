@@ -80,6 +80,10 @@ public class MobMindConfig {
 	public int voiceThreads = 2;
 	/** 偏好的麦克风名称（空 = 系统默认） */
 	public String micMixerName = "";
+	/** Ctrl+Z 召唤时默认召唤最近的朋友数量（0=召唤全部） */
+	public int recallCount = 2;
+	/** Ctrl+Z 召唤时是否包含村民 */
+	public boolean recallVillagers = true;
 
 	public static MobMindConfig get() {
 		return INSTANCE;

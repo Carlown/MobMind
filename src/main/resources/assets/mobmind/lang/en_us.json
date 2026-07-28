@@ -6,6 +6,7 @@
   "gui.mobmind.config.title": "MobMind Settings",
   "gui.mobmind.config.section.api": "Cloud API (Chat / Fallback Voice)",
   "gui.mobmind.config.section.local": "Local Voice Engine sherpa-onnx",
+  "gui.mobmind.config.section.behavior": "Behavior Settings",
   "gui.mobmind.config.label.apiEndpoint": "API Endpoint",
   "gui.mobmind.config.label.apiKey": "API Key",
   "gui.mobmind.config.label.chatModel": "Chat Model",
@@ -30,6 +31,9 @@
   "gui.mobmind.config.toggle.greetingEnabled": "Mob Greetings",
   "gui.mobmind.config.toggle.offlineFallback": "Offline Fallback Replies",
   "gui.mobmind.config.toggle.creativeTauntEnabled": "Creative Mode Taunts",
+  "gui.mobmind.config.toggle.recallVillagers": "Recall Villagers",
+  "gui.mobmind.config.label.recallCount": "Recall Count (0=all)",
+  "gui.mobmind.config.hint.recallCount": "Ctrl+Z recalls the N nearest friends",
   "gui.mobmind.config.button.save": "Save",
   "gui.mobmind.config.button.cancel": "Cancel",
   "gui.mobmind.config.mic.default": "System Default",
@@ -58,5 +62,23 @@
   "status.mobmind.stt_not_configured": "Voice recognition not configured: press Ctrl+K to open settings and fill in the sherpa-onnx directory or API key",
 
   "advancements.mobmind.bargain_success.title": "Bargain Master",
-  "advancements.mobmind.bargain_success.description": "Use your silver tongue to successfully haggle a villager down once"
+  "advancements.mobmind.bargain_success.description": "Use your silver tongue to successfully haggle a villager down once",
+
+  "status.mobmind.recall.cooldown": "§e[MobMind] Recall on cooldown, wait %s seconds",
+  "status.mobmind.recall.none": "§e[MobMind] No friendly mobs to recall",
+  "status.mobmind.recall.set": "§a[MobMind] Default recall count set to %s, recalled %s friendly mobs (%s cross-dim)",
+  "status.mobmind.recall.success": "§a[MobMind] Recalled %s friendly mobs to your side",
+  "status.mobmind.recall.success_crossdim": "§a[MobMind] Recalled %s friendly mobs (%s from other dimensions)",
+  "status.mobmind.dismiss.none": "§e[MobMind] No friends to dismiss",
+  "status.mobmind.dismiss.success": "§a[MobMind] Dismissed %s friends back",
+  "status.mobmind.dismiss.success_crossdim": "§a[MobMind] Dismissed %s friends (%s returned to other dimensions)",
+
+  "item.mobmind.friend_selector": "Friend Selector",
+  "item.mobmind.friend_selector.tooltip.1": "§7Right-click a friendly mob to select/deselect",
+  "item.mobmind.friend_selector.tooltip.2": "§7Selected mobs glow for visibility",
+  "item.mobmind.friend_selector.tooltip.3": "§7Ctrl+Z will only recall selected friends",
+  "item.mobmind.friend_selector.not_friendly": "§cThis mob is not your friend yet",
+  "item.mobmind.friend_selector.selected": "§aSelected %s (%s total)",
+  "item.mobmind.friend_selector.deselected": "§eDeselected %s",
+  "item.mobmind.friend_selector.full": "§cMax %s friends can be selected"
 }

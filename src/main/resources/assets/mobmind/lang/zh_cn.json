@@ -6,6 +6,7 @@
   "gui.mobmind.config.title": "MobMind 设置",
   "gui.mobmind.config.section.api": "云端 API（聊天 / 备用语音）",
   "gui.mobmind.config.section.local": "本地语音引擎 sherpa-onnx",
+  "gui.mobmind.config.section.behavior": "行为设置",
   "gui.mobmind.config.label.apiEndpoint": "API 端点",
   "gui.mobmind.config.label.apiKey": "访问密钥",
   "gui.mobmind.config.label.chatModel": "聊天模型",
@@ -30,6 +31,9 @@
   "gui.mobmind.config.toggle.greetingEnabled": "生物主动打招呼",
   "gui.mobmind.config.toggle.offlineFallback": "离线兜底回复",
   "gui.mobmind.config.toggle.creativeTauntEnabled": "创造模式嘲讽",
+  "gui.mobmind.config.toggle.recallVillagers": "召唤村民",
+  "gui.mobmind.config.label.recallCount": "召唤朋友数量(0=全部)",
+  "gui.mobmind.config.hint.recallCount": "Ctrl+Z 召唤最近的N只朋友",
   "gui.mobmind.config.button.save": "保存",
   "gui.mobmind.config.button.cancel": "取消",
   "gui.mobmind.config.mic.default": "系统默认",
@@ -58,5 +62,23 @@
   "status.mobmind.stt_not_configured": "未配置语音识别：按 Ctrl+K 打开设置，填写 sherpa-onnx 目录或 API 密钥",
 
   "advancements.mobmind.bargain_success.title": "砍价高手",
-  "advancements.mobmind.bargain_success.description": "凭三寸不烂之舌，成功让村民给你降了一次价"
+  "advancements.mobmind.bargain_success.description": "凭三寸不烂之舌，成功让村民给你降了一次价",
+
+  "status.mobmind.recall.cooldown": "§e[MobMind] 召唤冷却中，请稍等 %s 秒",
+  "status.mobmind.recall.none": "§e[MobMind] 目前没有可召唤的友好生物",
+  "status.mobmind.recall.set": "§a[MobMind] 已设置默认召唤数量为 %s，本次召唤 %s 只友好生物（跨维度 %s 只）",
+  "status.mobmind.recall.success": "§a[MobMind] 已召唤 %s 只友好生物到身边",
+  "status.mobmind.recall.success_crossdim": "§a[MobMind] 已召唤 %s 只友好生物到身边（其中 %s 只来自其他维度）",
+  "status.mobmind.dismiss.none": "§e[MobMind] 没有需要送回的友好生物",
+  "status.mobmind.dismiss.success": "§a[MobMind] 已送回 %s 只友好生物",
+  "status.mobmind.dismiss.success_crossdim": "§a[MobMind] 已送回 %s 只友好生物（其中 %s 只返回其他维度）",
+
+  "item.mobmind.friend_selector": "朋友选择器",
+  "item.mobmind.friend_selector.tooltip.1": "§7右键友好生物选中/取消选中",
+  "item.mobmind.friend_selector.tooltip.2": "§7选中的生物会发光提示",
+  "item.mobmind.friend_selector.tooltip.3": "§7按Ctrl+Z将只召唤选中的朋友",
+  "item.mobmind.friend_selector.not_friendly": "§c这个生物还不是你的朋友",
+  "item.mobmind.friend_selector.selected": "§a已选中 %s（共 %s 个）",
+  "item.mobmind.friend_selector.deselected": "§e已取消选中 %s",
+  "item.mobmind.friend_selector.full": "§c最多只能选中 %s 个朋友"
 }
