@@ -1,4 +1,7 @@
 {
+  "modmenu.nameTranslation.mobmind": "生物心智",
+  "modmenu.descriptionTranslation.mobmind": "为 Minecraft 生物赋予独立 AI 人格：语音对话、好感度、行为影响。",
+
   "key.mobmind.mic": "MobMind：V 切换录音 / Ctrl+V 按住说话",
   "key.mobmind.talk": "MobMind：与生物对话（文字）",
   "key.mobmind.config": "MobMind：设置界面（Ctrl+K）",
@@ -61,14 +64,12 @@
   "status.mobmind.voice_disabled": "语音输入已在设置中禁用，可按 Y 使用文字对话",
   "status.mobmind.stt_not_configured": "未配置语音识别：按 Ctrl+K 打开设置，填写 sherpa-onnx 目录或 API 密钥",
 
-  "advancements.mobmind.bargain_success.title": "砍价高手",
-  "advancements.mobmind.bargain_success.description": "凭三寸不烂之舌，成功让村民给你降了一次价",
-
   "status.mobmind.recall.cooldown": "§e[MobMind] 召唤冷却中，请稍等 %s 秒",
   "status.mobmind.recall.none": "§e[MobMind] 目前没有可召唤的友好生物",
-  "status.mobmind.recall.set": "§a[MobMind] 已设置默认召唤数量为 %s，本次召唤 %s 只友好生物（跨维度 %s 只）",
+  "status.mobmind.recall.set": "§a[MobMind] 已设置默认召唤数量为 %s，本次召唤 %s 只友好生物",
   "status.mobmind.recall.success": "§a[MobMind] 已召唤 %s 只友好生物到身边",
-  "status.mobmind.recall.success_crossdim": "§a[MobMind] 已召唤 %s 只友好生物到身边（其中 %s 只来自其他维度）",
+  "status.mobmind.recall.other_dimension": "§e[MobMind] 选中的 %s 个朋友在其他维度，无法跨维度召唤",
+  "status.mobmind.recall.success_other_dim": "§a[MobMind] 已召唤 %s 只友好生物到身边，另有 %s 个选中的朋友在其他维度无法召唤",
   "status.mobmind.dismiss.none": "§e[MobMind] 没有需要送回的友好生物",
   "status.mobmind.dismiss.success": "§a[MobMind] 已送回 %s 只友好生物",
   "status.mobmind.dismiss.success_crossdim": "§a[MobMind] 已送回 %s 只友好生物（其中 %s 只返回其他维度）",

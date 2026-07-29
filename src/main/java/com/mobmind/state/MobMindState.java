@@ -172,9 +172,9 @@ public final class MobMindState {
 		}
 	}
 
-	/** 标记一个物品为"生物给玩家的奖励"，生物自己不能捡回去（有效期100tick=5秒） */
+	/** 标记一个物品为"生物给玩家的奖励"，生物自己不能捡回去（有效期1200tick=60秒） */
 	public static void markRewardItem(UUID itemEntityId, long currentGameTime) {
-		REWARD_ITEMS.put(itemEntityId, currentGameTime + 100);
+		REWARD_ITEMS.put(itemEntityId, currentGameTime + 1200);
 	}
 
 	/** 检查该物品是否是生物刚给玩家的奖励（生物不能捡回去）；同时清理过期条目 */
@@ -313,6 +313,8 @@ public final class MobMindState {
 	private static final Map<UUID, Long> GLOW_UNTIL = new ConcurrentHashMap<>();
 	/** entityUuid -> 持有的不死图腾数量（玩家赠送） */
 	private static final Map<UUID, Integer> TOTEMS = new ConcurrentHashMap<>();
+	/** entityUuid -> 存储的食物数量（玩家赠送，低血量时自动食用） */
+	private static final Map<UUID, Integer> STORED_FOOD = new ConcurrentHashMap<>();
 
 	public static int bargainCount(UUID villagerId, int offerIndex) {
 		return BARGAINS.getOrDefault(villagerId, Map.of()).getOrDefault(offerIndex, 0);
@@ -377,6 +379,29 @@ public final class MobMindState {
 		if (count <= 0) return false;
 		if (count <= 1) TOTEMS.remove(id);
 		else TOTEMS.put(id, count - 1);
+		return true;
+	}
+
+	// ---------- 存储食物 ----------
+
+	/** 给生物添加存储食物（玩家赠送，满血时存起来） */
+	public static void addStoredFood(Mob mob, int count) {
+		STORED_FOOD.merge(mob.getUUID(), count, Integer::sum);
+		mob.setPersistenceRequired();
+	}
+
+	/** 获取生物存储的食物数量 */
+	public static int getStoredFoodCount(Mob mob) {
+		return STORED_FOOD.getOrDefault(mob.getUUID(), 0);
+	}
+
+	/** 尝试消耗一份存储食物，返回是否成功 */
+	public static boolean consumeStoredFood(Mob mob) {
+		UUID id = mob.getUUID();
+		int count = STORED_FOOD.getOrDefault(id, 0);
+		if (count <= 0) return false;
+		if (count <= 1) STORED_FOOD.remove(id);
+		else STORED_FOOD.put(id, count - 1);
 		return true;
 	}
 
@@ -570,38 +595,40 @@ public final class MobMindState {
 		return addAmmo(mob, "arrow", amount);
 	}
 
+	/** 选择下一支要使用的箭的 ammoKey（不消耗）：优先光灵箭，其次药水箭（数量多的优先，同数量按字典序），最后普通箭。
+	 *  无弹药返回 null。 */
+	private static String selectNextAmmoKey(Map<String, Integer> inv) {
+		if (inv == null || inv.isEmpty()) return null;
+
+		// 1) 光灵箭最优先
+		if (inv.getOrDefault("spectral", 0) > 0) return "spectral";
+
+		// 2) 药水箭：数量最多的优先，同数量时按 key 字典序
+		String bestTipped = null;
+		int bestTippedCount = 0;
+		for (Map.Entry<String, Integer> e : inv.entrySet()) {
+			String k = e.getKey();
+			if (k.startsWith("tipped:") && e.getValue() > 0) {
+				if (bestTipped == null || e.getValue() > bestTippedCount
+						|| (e.getValue() == bestTippedCount && k.compareTo(bestTipped) < 0)) {
+					bestTipped = k;
+					bestTippedCount = e.getValue();
+				}
+			}
+		}
+		if (bestTipped != null) return bestTipped;
+
+		// 3) 普通箭
+		if (inv.getOrDefault("arrow", 0) > 0) return "arrow";
+
+		return null;
+	}
+
 	/** 消耗一支箭：优先消耗特殊箭（光灵/药水），用完再用普通箭。
 	 *  返回被消耗的箭的 ammoKey；无弹药返回 null。 */
 	public static String consumeAmmoArrow(Mob mob) {
 		Map<String, Integer> inv = AMMO.get(mob.getUUID());
-		if (inv == null || inv.isEmpty()) return null;
-
-		// 优先级：1) 光灵箭  2) 药水箭（任意类型）  3) 普通箭
-		// 药水箭内部按 key 字典序（先到先得），每种独立
-		String chosen = null;
-
-		if (inv.getOrDefault("spectral", 0) > 0) {
-			chosen = "spectral";
-		} else {
-			String bestTipped = null;
-			int bestTippedCount = 0;
-			for (Map.Entry<String, Integer> e : inv.entrySet()) {
-				String k = e.getKey();
-				if (k.startsWith("tipped:") && e.getValue() > 0) {
-					if (bestTipped == null || e.getValue() > bestTippedCount
-							|| (e.getValue() == bestTippedCount && k.compareTo(bestTipped) < 0)) {
-						bestTipped = k;
-						bestTippedCount = e.getValue();
-					}
-				}
-			}
-			if (bestTipped != null) {
-				chosen = bestTipped;
-			} else if (inv.getOrDefault("arrow", 0) > 0) {
-				chosen = "arrow";
-			}
-		}
-
+		String chosen = selectNextAmmoKey(inv);
 		if (chosen == null) return null;
 		int left = inv.get(chosen) - 1;
 		if (left <= 0) inv.remove(chosen);
@@ -616,14 +643,7 @@ public final class MobMindState {
 
 	/** 取一支箭但不消耗（用于弩装填时查看下一支箭类型），返回 ammoKey；无弹药返回 null */
 	public static String peekAmmo(Mob mob) {
-		Map<String, Integer> inv = AMMO.get(mob.getUUID());
-		if (inv == null || inv.isEmpty()) return null;
-		if (inv.getOrDefault("spectral", 0) > 0) return "spectral";
-		for (Map.Entry<String, Integer> e : inv.entrySet()) {
-			if (e.getKey().startsWith("tipped:") && e.getValue() > 0) return e.getKey();
-		}
-		if (inv.getOrDefault("arrow", 0) > 0) return "arrow";
-		return null;
+		return selectNextAmmoKey(AMMO.get(mob.getUUID()));
 	}
 
 	// ---------- 玩家给予武器标记（用于区分自然生成带武器的生物） ----------
@@ -636,6 +656,11 @@ public final class MobMindState {
 	/** 该生物是否收到过玩家给予的武器/盾牌（自然生成带武器的骷髅等返回 false，保留原版 AI） */
 	public static boolean hasPlayerGivenWeapon(Mob mob) {
 		return PLAYER_GIVEN_WEAPON.contains(mob.getUUID());
+	}
+
+	/** 重载：通过 UUID 检查是否收到过玩家给予的武器 */
+	public static boolean hasPlayerGivenWeapon(UUID entityId) {
+		return PLAYER_GIVEN_WEAPON.contains(entityId);
 	}
 
 	// ---------- 对话历史（持久化） ----------
@@ -846,6 +871,18 @@ public final class MobMindState {
 				}
 			}
 		}
+		if (root.has("storedFood")) {
+			com.google.gson.JsonElement fEl = root.get("storedFood");
+			if (fEl.isJsonObject()) {
+				for (Map.Entry<String, com.google.gson.JsonElement> entry : fEl.getAsJsonObject().entrySet()) {
+					try {
+						UUID entityId = UUID.fromString(entry.getKey());
+						int count = entry.getValue().getAsInt();
+						if (count > 0) STORED_FOOD.put(entityId, count);
+					} catch (IllegalArgumentException ignored) {}
+				}
+			}
+		}
 		MobMindMod.LOGGER.info("[MobMind] 已加载 {} 只生物的人格档案，{} 只生物的对话历史", PERSONALITIES.size(), CONVERSATION_HISTORY.size());
 		} catch (Exception e) {
 			MobMindMod.LOGGER.warn("[MobMind] 存档数据读取失败", e);
@@ -889,6 +926,9 @@ public final class MobMindState {
 		com.google.gson.JsonObject t = new com.google.gson.JsonObject();
 		TOTEMS.forEach((uuid, count) -> t.addProperty(uuid.toString(), count));
 		root.add("totems", t);
+		com.google.gson.JsonObject sf = new com.google.gson.JsonObject();
+		STORED_FOOD.forEach((uuid, count) -> sf.addProperty(uuid.toString(), count));
+		root.add("storedFood", sf);
 		try {
 			Path tmp = saveFile.resolveSibling("mobmind.json.tmp");
 			try (Writer w = Files.newBufferedWriter(tmp)) {
@@ -912,6 +952,7 @@ public final class MobMindState {
 		AMMO.clear();
 		PLAYER_GIVEN_WEAPON.clear();
 		TOTEMS.clear();
+		STORED_FOOD.clear();
 		GLOW_UNTIL.clear();
 		saveFile = null;
 	}
@@ -1007,6 +1048,28 @@ public final class MobMindState {
 		if (count > 0) TOTEMS.put(entityId, count);
 	}
 
+	/** 获取行为指令（用于变形迁移） */
+	public static Order getOrder(UUID entityId) {
+		return ORDERS.get(entityId);
+	}
+
+	/** 设置行为指令（用于变形迁移） */
+	public static void setOrder(UUID entityId, Order order) {
+		if (order != null) ORDERS.put(entityId, order);
+	}
+
+	/** 获取砍价记录（用于变形迁移） */
+	public static Map<Integer, Integer> getBargains(UUID entityId) {
+		return BARGAINS.get(entityId);
+	}
+
+	/** 设置砍价记录（用于变形迁移） */
+	public static void setBargains(UUID entityId, Map<Integer, Integer> bargains) {
+		if (bargains != null && !bargains.isEmpty()) {
+			BARGAINS.put(entityId, new ConcurrentHashMap<>(bargains));
+		}
+	}
+
 	/** 获取僵尸村民治愈数据（用于变形迁移） */
 	public static Object getCuringData(UUID entityId) {
 		if (CURING_ZOMBIE_VILLAGERS.containsKey(entityId)) {
@@ -1044,6 +1107,7 @@ public final class MobMindState {
 		AMMO.remove(entityId);
 		PLAYER_GIVEN_WEAPON.remove(entityId);
 		TOTEMS.remove(entityId);
+		STORED_FOOD.remove(entityId);
 		GLOW_UNTIL.remove(entityId);
 		clearCuringZombieVillager(entityId);
 	}
@@ -1051,6 +1115,83 @@ public final class MobMindState {
 	/** 重载：标记玩家给武器（通过 UUID） */
 	public static void markPlayerGivenWeapon(UUID entityId) {
 		PLAYER_GIVEN_WEAPON.add(entityId);
+	}
+
+	/** 迁移生物所有 MobMind 数据（好感度、人格、对话历史、弹药等）到新实体。
+	 *  供 MobTransformationMixin 和 VillagerMixin 调用。 */
+	public static void transferAllData(UUID oldId, UUID newId, Mob newMob) {
+		// 武器标记
+		if (hasPlayerGivenWeapon(oldId)) {
+			markPlayerGivenWeapon(newId);
+			newMob.setPersistenceRequired();
+		}
+		// 好感度
+		Map<UUID, Integer> friendship = getAllFriendship(oldId);
+		if (friendship != null) {
+			for (Map.Entry<UUID, Integer> e : friendship.entrySet()) {
+				setFriendship(newId, e.getKey(), e.getValue());
+			}
+		}
+		// 激怒
+		Map<UUID, Long> provoked = getAllProvoked(oldId);
+		if (provoked != null) {
+			for (Map.Entry<UUID, Long> e : provoked.entrySet()) {
+				setProvoked(newId, e.getKey(), e.getValue());
+			}
+		}
+		// 安抚
+		Map<UUID, Long> calmed = getAllCalmed(oldId);
+		if (calmed != null) {
+			for (Map.Entry<UUID, Long> e : calmed.entrySet()) {
+				setCalmed(newId, e.getKey(), e.getValue());
+			}
+		}
+		// 人格
+		Object personality = getPersonalityData(oldId);
+		if (personality != null) {
+			setPersonalityData(newId, personality);
+		}
+		// 对话历史
+		Object convHistory = getConversationHistoryData(oldId);
+		if (convHistory != null) {
+			setConversationHistoryData(newId, convHistory);
+		}
+		// 弹药
+		Map<String, Integer> ammo = getAllAmmo(oldId);
+		if (ammo != null) {
+			for (Map.Entry<String, Integer> e : ammo.entrySet()) {
+				setAmmo(newId, e.getKey(), e.getValue());
+			}
+		}
+		// 图腾
+		int totems = getTotemCount(oldId);
+		if (totems > 0) {
+			setTotemCount(newId, totems);
+		}
+		// 存储食物
+		int food = STORED_FOOD.getOrDefault(oldId, 0);
+		if (food > 0) {
+			STORED_FOOD.put(newId, food);
+		}
+		// 行为指令
+		Order order = getOrder(oldId);
+		if (order != null) {
+			setOrder(newId, order);
+		}
+		// 砍价折扣
+		Map<Integer, Integer> bargains = getBargains(oldId);
+		if (bargains != null) {
+			setBargains(newId, bargains);
+		}
+		// 治愈数据
+		Object curing = getCuringData(oldId);
+		if (curing != null) {
+			setCuringData(newId, curing);
+		}
+		// 清除旧数据
+		clearEntityData(oldId);
+		com.mobmind.MobMindMod.LOGGER.info("[MobMind] 数据迁移完成: {} → {} ({})",
+				oldId, newId, newMob.getType().getDescription().getString());
 	}
 
 	/** 重载：标记僵尸村民治愈（通过 UUID） */

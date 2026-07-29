@@ -1,4 +1,7 @@
 {
+  "modmenu.nameTranslation.mobmind": "MobMind",
+  "modmenu.descriptionTranslation.mobmind": "Give Minecraft mobs individual AI personalities: voice chat, friendship, behavior influence.",
+
   "key.mobmind.mic": "MobMind: V Toggle / Ctrl+V Hold to Speak",
   "key.mobmind.talk": "MobMind: Talk to Mob (Text)",
   "key.mobmind.config": "MobMind: Settings (Ctrl+K)",
@@ -61,14 +64,12 @@
   "status.mobmind.voice_disabled": "Voice input is disabled in settings; press Y to type instead",
   "status.mobmind.stt_not_configured": "Voice recognition not configured: press Ctrl+K to open settings and fill in the sherpa-onnx directory or API key",
 
-  "advancements.mobmind.bargain_success.title": "Bargain Master",
-  "advancements.mobmind.bargain_success.description": "Use your silver tongue to successfully haggle a villager down once",
-
   "status.mobmind.recall.cooldown": "§e[MobMind] Recall on cooldown, wait %s seconds",
   "status.mobmind.recall.none": "§e[MobMind] No friendly mobs to recall",
-  "status.mobmind.recall.set": "§a[MobMind] Default recall count set to %s, recalled %s friendly mobs (%s cross-dim)",
+  "status.mobmind.recall.set": "§a[MobMind] Default recall count set to %s, recalled %s friendly mobs",
   "status.mobmind.recall.success": "§a[MobMind] Recalled %s friendly mobs to your side",
-  "status.mobmind.recall.success_crossdim": "§a[MobMind] Recalled %s friendly mobs (%s from other dimensions)",
+  "status.mobmind.recall.other_dimension": "§e[MobMind] %s selected friends are in other dimensions and cannot be recalled across dimensions",
+  "status.mobmind.recall.success_other_dim": "§a[MobMind] Recalled %s friendly mobs, %s selected friends in other dimensions could not be recalled",
   "status.mobmind.dismiss.none": "§e[MobMind] No friends to dismiss",
   "status.mobmind.dismiss.success": "§a[MobMind] Dismissed %s friends back",
   "status.mobmind.dismiss.success_crossdim": "§a[MobMind] Dismissed %s friends (%s returned to other dimensions)",

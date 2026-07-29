@@ -18,6 +18,12 @@ public final class PersonalityGenerator {
 			"花椒", "大壮", "小霜", "阿炭", "栗子", "阿淼", "土土", "阿岚", "弯弯", "墩墩"
 	};
 
+	private static final String[] ENGLISH_NAMES = {
+			"Ash", "Shadow", "Snowy", "Clover", "Iron", "Bean", "Fluffy", "Junior", "Rocky", "Luna",
+			"Rex", "Finn", "Sunny", "Tea", "Boo", "Egg", "Milly", "Bamboo", "Mochi", "Rio",
+			"Pepper", "Max", "Frost", "Carbon", "Chestnut", "Aqua", "Dirt", "Stormy", "Willow", "Chunk"
+	};
+
 	private static final String[] HOSTILE_ARCHETYPES = {
 			"暴躁但讲义气", "外冷内热的傲娇", "被迫营业的打工人", "自认高贵的反派", "话痨型战斗狂",
 			"阴郁的哲学家", "记仇的小心眼", "渴望被理解的孤独者", "爱面子的大哥", "佛系躺平的厌战者"
@@ -91,6 +97,12 @@ public final class PersonalityGenerator {
 		};
 		int humor = r.nextInt(100);
 		return new Personality(name, archetype, style, backstory, sociability, temper, humor);
+	}
+
+	/** 以 UUID 为种子生成稳定的英文昵称（不持久化，显示时生成） */
+	public static String generateEnglishName(UUID id) {
+		Random r = new Random(id.hashCode() * 31L + 7);
+		return ENGLISH_NAMES[r.nextInt(ENGLISH_NAMES.length)];
 	}
 
 	/** 初始好感度：敌对生物低、中立中等、被动较高 */

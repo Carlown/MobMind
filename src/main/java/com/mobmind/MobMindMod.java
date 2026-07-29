@@ -7,6 +7,7 @@ import com.mobmind.behavior.FriendRecall;
 import com.mobmind.behavior.GiftActions;
 import com.mobmind.behavior.TntFear;
 import com.mobmind.behavior.WeaponAttackGoal;
+import com.mobmind.behavior.WeaponRangedAttackGoal;
 import com.mobmind.config.MobMindConfig;
 import com.mobmind.item.FriendSelectorItem;
 import com.mobmind.net.MobPackets;
@@ -63,6 +64,7 @@ public class MobMindMod implements ModInitializer {
 	private int barterCounter = 0;
 	private int bedCounter = 0;
 	private int foodRequestCounter = 0;
+	private int autoEatCounter = 0;
 	private int giftCounter = 0;
 	private int tntCounter = 0;
 	private int deathRecoveryCounter = 0;
@@ -223,58 +225,79 @@ public class MobMindMod implements ModInitializer {
 				return InteractionResult.PASS; // 满血则不消耗，交给原版
 			}
 
-			// 玩家没有蹲下时：
-			// - 食物可以直接右键喂（不消耗给装备）
-			// - 武器/盔甲/盾牌/弹药：返回 FAIL 明确阻止交互，防止误触或原版意外消耗物品
-			// - 其他物品（命名牌、拴绳等）：返回 PASS 交给原版处理
+			// 右键交互规则：
+			// - 不蹲右键：食物喂食、铁傀儡修复、铜傀儡除锈/上蜡；装备类物品阻止误触
+			// - 蹲下右键：专门给装备（武器/盾牌/盔甲/弹药/图腾），其他物品交给原版/mod处理
+			// - 普通礼物（花、面包等非装备物品）：不需要右键，直接丢地上让生物自己捡（GiftActions.tick处理）
 			boolean isFood = stack.get(net.minecraft.core.component.DataComponents.FOOD) != null
 					&& com.mobmind.util.FoodValues.healFor(stack.getItem()) > 0;
-			boolean isEquipItem = !stack.isEmpty() && (
+			boolean canEquip = canUseEquipment(mob);
+			boolean isEquipItem = !stack.isEmpty() && canEquip && (
 					WeaponAttackGoal.isWeapon(stack)
 					|| GiftActions.isShield(stack)
 					|| isAmmo(stack)
 					|| stack.is(net.minecraft.world.item.Items.TOTEM_OF_UNDYING)
-					|| stack.get(net.minecraft.core.component.DataComponents.EQUIPPABLE) != null
+					|| (stack.get(net.minecraft.core.component.DataComponents.EQUIPPABLE) != null
+						&& stack.get(net.minecraft.core.component.DataComponents.EQUIPPABLE).slot().getType()
+							== net.minecraft.world.entity.EquipmentSlot.Type.HUMANOID_ARMOR)
 			);
 
+			// ====== 不蹲右键 ======
 			if (!player.isShiftKeyDown()) {
-				if (isFood) {
-					// 食物继续走喂食逻辑
-				} else if (isEquipItem) {
-					// 装备类物品未蹲下：明确拒绝交互，防止物品被原版意外消耗
+				// 装备类物品阻止误触
+				if (isEquipItem) {
 					return InteractionResult.FAIL;
-				} else {
-					// 其他物品（命名牌、空手等）交由原版
-					return InteractionResult.PASS;
+				}
+				// 其他物品（命名牌、花、普通礼物等）交给原版处理
+				return InteractionResult.PASS;
+			}
+
+			// ====== 蹲下右键：喂食 + 装备赠送 ======
+			// 蹲下喂食：只有支持的生物才能喂
+			if (isFood && PersonaRegistry.supports(mob) && mob.getHealth() < mob.getMaxHealth()) {
+				float heal = com.mobmind.util.FoodValues.healFor(stack.getItem());
+				if (heal > 0) {
+					String foodName = stack.getHoverName().getString();
+					mob.heal(heal);
+					world.playSound(null, mob.getX(), mob.getY(), mob.getZ(),
+							net.minecraft.sounds.SoundEvents.GENERIC_EAT,
+							net.minecraft.sounds.SoundSource.NEUTRAL, 1.0f, 1.0f);
+					if (!sp.isCreative()) stack.shrink(1);
+					MobMindState.adjustFriendship(mob, sp.getUUID(), 3);
+					MobAiService.onFoodFed(mob, sp, foodName, heal);
+					return InteractionResult.SUCCESS;
 				}
 			}
 
-			// —— 以下是蹲下+右键的送礼逻辑 ——
+			// 不能使用装备的生物（铁傀儡/雪傀儡/铜傀儡）→ 交给原版/mod自己处理（如铜傀儡整理箱子）
+			if (!canEquip) {
+				return InteractionResult.PASS;
+			}
 
-			// 送盔甲：能穿的生物会自动穿上，换下的旧装备丢出来
+			// 送盔甲：能穿的生物会自动穿上，换下的旧装备丢出来（未注册persona的生物也能穿）
 			var equippable = stack.get(net.minecraft.core.component.DataComponents.EQUIPPABLE);
-			if (equippable != null && PersonaRegistry.supports(mob) && mob.canHoldItem(stack)) {
+			if (equippable != null && mob.canHoldItem(stack)) {
 				var slot = equippable.slot();
 				if (slot.getType() == net.minecraft.world.entity.EquipmentSlot.Type.HUMANOID_ARMOR) {
-					// 南瓜类只做交易/礼物，不要自动戴头上
+					// 南瓜类只做交易/礼物（丢地上送），不要自动戴头上
 					if (stack.is(net.minecraft.world.item.Items.PUMPKIN)
 							|| stack.is(net.minecraft.world.item.Items.CARVED_PUMPKIN)
 							|| stack.is(net.minecraft.world.item.Items.JACK_O_LANTERN)) {
 						return InteractionResult.PASS;
 					}
-					if (mob.getItemBySlot(slot).getItem() == stack.getItem()) return InteractionResult.PASS;
-					// 先保存物品名（消耗前），避免 shrink(1) 后变成空气
+					net.minecraft.world.item.ItemStack oldArmor = mob.getItemBySlot(slot);
+					if (!isBetterItem(stack, oldArmor)) return InteractionResult.PASS;
 					String armorName = stack.getHoverName().getString();
-					net.minecraft.world.item.ItemStack old = mob.getItemBySlot(slot);
 					mob.setItemSlot(slot, stack.copyWithCount(1));
 					mob.setGuaranteedDrop(slot);
 					if (!sp.isCreative()) stack.shrink(1);
-					if (!old.isEmpty()) {
+					if (!oldArmor.isEmpty()) {
 						net.minecraft.world.entity.item.ItemEntity drop = new net.minecraft.world.entity.item.ItemEntity(
-								world, mob.getX(), mob.getY() + 0.5, mob.getZ(), old);
+								world, mob.getX(), mob.getY() + 0.5, mob.getZ(), oldArmor);
 						world.addFreshEntity(drop);
 					}
-					mob.setPersistenceRequired(); // 穿了装备就不让它消失
+					mob.setPersistenceRequired();
+					MobMindState.adjustFriendship(mob, sp.getUUID(), 5);
 					if (PersonaRegistry.supports(mob)) {
 						MobAiService.onArmorGiven(mob, sp, armorName, slot);
 					}
@@ -282,60 +305,50 @@ public class MobMindMod implements ModInitializer {
 				}
 			}
 
-			// 给武器：右键生物时手持武器，生物会装备到主手并正确使用攻击
-			// 武器装备后会自动使用武器的伤害值进行攻击（Minecraft 原版 doHurtTarget）
-			// 持武器的生物还会通过 WeaponAttackGoal 主动攻击附近的敌人保护玩家
-			// 仅支持PersonaRegistry中注册的生物（普通动物如猪牛狼不接收武器）
-			if (PersonaRegistry.supports(mob) && mob.canHoldItem(stack) && WeaponAttackGoal.isWeapon(stack)) {
-				// 主手已有同款武器则跳过
-				if (mob.getItemBySlot(EquipmentSlot.MAINHAND).getItem() == stack.getItem()) return InteractionResult.PASS;
-				// 先保存武器名（消耗前），避免 shrink(1) 后变成空气
-				String weaponName = stack.getHoverName().getString();
+			// 给武器：生物装备到主手，启用WeaponAttackGoal（未注册persona的生物也能接收）
+			if (mob.canHoldItem(stack) && WeaponAttackGoal.isWeapon(stack)) {
 				net.minecraft.world.item.ItemStack oldWeapon = mob.getItemBySlot(EquipmentSlot.MAINHAND);
+				if (!isBetterItem(stack, oldWeapon)) return InteractionResult.PASS;
+				String weaponName = stack.getHoverName().getString();
 				mob.setItemSlot(EquipmentSlot.MAINHAND, stack.copyWithCount(1));
 				mob.setGuaranteedDrop(EquipmentSlot.MAINHAND);
 				if (!sp.isCreative()) stack.shrink(1);
-				// 旧主手物品丢出来，不直接消失
 				if (!oldWeapon.isEmpty()) {
 					ItemEntity drop = new ItemEntity(world, mob.getX(), mob.getY() + 0.5, mob.getZ(), oldWeapon);
 					world.addFreshEntity(drop);
 				}
-				mob.setPersistenceRequired(); // 拿了武器就不让它消失
-				MobMindState.markPlayerGivenWeapon(mob); // 标记为玩家给予武器，启用自定义攻击 Goal
+				mob.setPersistenceRequired();
+				MobMindState.markPlayerGivenWeapon(mob);
+				MobMindState.adjustFriendship(mob, sp.getUUID(), 8);
 				if (PersonaRegistry.supports(mob)) {
 					MobAiService.onWeaponGiven(mob, sp, weaponName);
 				}
 				return InteractionResult.SUCCESS;
 			}
 
-			// 给盾牌：右键生物时手持盾牌，生物会装备到副手并正确使用格挡
-			// 持盾牌的生物会通过 ShieldBlockGoal 在受到攻击时举起盾牌格挡伤害
-			// 仅支持PersonaRegistry中注册的生物（普通动物如猪牛狼不接收盾牌）
-			if (PersonaRegistry.supports(mob) && mob.canHoldItem(stack) && GiftActions.isShield(stack)) {
-				// 副手已有同款盾牌则跳过
-				if (mob.getItemBySlot(EquipmentSlot.OFFHAND).getItem() == stack.getItem()) return InteractionResult.PASS;
-				// 先保存盾牌名（消耗前），避免 shrink(1) 后变成空气
-				String shieldName = stack.getHoverName().getString();
+			// 给盾牌：生物装备到副手，启用ShieldBlockGoal（未注册persona的生物也能接收）
+			if (mob.canHoldItem(stack) && GiftActions.isShield(stack)) {
 				net.minecraft.world.item.ItemStack oldOff = mob.getItemBySlot(EquipmentSlot.OFFHAND);
+				if (!isBetterItem(stack, oldOff)) return InteractionResult.PASS;
+				String shieldName = stack.getHoverName().getString();
 				mob.setItemSlot(EquipmentSlot.OFFHAND, stack.copyWithCount(1));
 				mob.setGuaranteedDrop(EquipmentSlot.OFFHAND);
 				if (!sp.isCreative()) stack.shrink(1);
-				// 旧副手物品丢出来，不直接消失
 				if (!oldOff.isEmpty()) {
 					ItemEntity drop = new ItemEntity(world, mob.getX(), mob.getY() + 0.5, mob.getZ(), oldOff);
 					world.addFreshEntity(drop);
 				}
-				mob.setPersistenceRequired(); // 拿了盾牌就不让它消失
-				MobMindState.markPlayerGivenWeapon(mob); // 标记为玩家给予武器/盾牌，启用自定义格挡 Goal
+				mob.setPersistenceRequired();
+				MobMindState.markPlayerGivenWeapon(mob);
+				MobMindState.adjustFriendship(mob, sp.getUUID(), 8);
 				if (PersonaRegistry.supports(mob)) {
 					MobAiService.onShieldGiven(mob, sp, shieldName);
 				}
 				return InteractionResult.SUCCESS;
 			}
 
-			// 给箭：增加远程武器弹药（弓/弩使用，支持普通箭/光灵箭/药水箭）
-			// 仅支持PersonaRegistry中注册的生物（普通动物如猪牛狼不接收弹药）
-			if (PersonaRegistry.supports(mob) && mob.canHoldItem(stack) && isAmmo(stack)) {
+			// 给箭：增加远程武器弹药（箭不经过canHoldItem检查，直接入MobMind弹药库；未注册persona的生物也能收）
+			if (isAmmo(stack)) {
 				String ammoName = stack.getHoverName().getString();
 				int count = stack.getCount();
 				String ammoKey = MobMindState.ammoKeyFor(stack);
@@ -343,15 +356,20 @@ public class MobMindMod implements ModInitializer {
 					MobMindState.addAmmo(mob, ammoKey, count);
 				}
 				if (!sp.isCreative()) stack.shrink(count);
+				// 关键！只要生物持有弓/弩，收了箭就标记玩家给予武器，让自定义远程AI接管
+				if (WeaponRangedAttackGoal.isHoldingRangedWeapon(mob)) {
+					MobMindState.markPlayerGivenWeapon(mob);
+				}
+				mob.setPersistenceRequired();
+				MobMindState.adjustFriendship(mob, sp.getUUID(), 4);
 				if (PersonaRegistry.supports(mob)) {
 					MobAiService.onAmmoGiven(mob, sp, ammoName, count);
 				}
 				return InteractionResult.SUCCESS;
 			}
 
-			// 给不死图腾：生物濒死时自动使用复活
-			// 仅支持PersonaRegistry中注册的生物（普通动物如猪牛狼不接收图腾）
-			if (PersonaRegistry.supports(mob) && mob.canHoldItem(stack)
+			// 给不死图腾：濒死时自动复活（未注册persona的生物也能接收）
+			if (mob.canHoldItem(stack)
 					&& stack.is(net.minecraft.world.item.Items.TOTEM_OF_UNDYING)) {
 				int count = stack.getCount();
 				MobMindState.addTotem(mob, count);
@@ -364,23 +382,8 @@ public class MobMindMod implements ModInitializer {
 				return InteractionResult.SUCCESS;
 			}
 
-			// 喂食物回血：友好生物可以吃玩家手里的食物（苹果/面包/肉/鱼等，蹲下或直接右键均可）
-			if (PersonaRegistry.supports(mob) && stack.get(net.minecraft.core.component.DataComponents.FOOD) != null
-					&& mob.getHealth() < mob.getMaxHealth()) {
-				float heal = com.mobmind.util.FoodValues.healFor(stack.getItem());
-				if (heal > 0) {
-					// 先保存食物名（消耗前），避免 shrink(1) 后变成空气
-					String foodName = stack.getHoverName().getString();
-					mob.heal(heal);
-					world.playSound(null, mob.getX(), mob.getY(), mob.getZ(),
-							net.minecraft.sounds.SoundEvents.GENERIC_EAT,
-							net.minecraft.sounds.SoundSource.NEUTRAL, 1.0f, 1.0f);
-					if (!sp.isCreative()) stack.shrink(1);
-					MobMindState.adjustFriendship(mob, sp.getUUID(), 3);
-					MobAiService.onFoodFed(mob, sp, foodName, heal);
-					return InteractionResult.SUCCESS;
-				}
-			}
+			// 蹲下+右键但不是装备物品（花、面包、食物等普通礼物）→ 交给原版处理
+			// 这些物品请直接丢地上赠送，生物会通过GiftActions.tick自动捡起
 			return InteractionResult.PASS;
 		});
 
@@ -437,6 +440,10 @@ public class MobMindMod implements ModInitializer {
 				foodRequestCounter = 0;
 				MobAiService.tryFoodRequest(server);
 			}
+			if (++autoEatCounter >= 60) { // 每3秒检查一次低血量自动吃存储食物
+				autoEatCounter = 0;
+				MobAiService.tickAutoEatFood(server);
+			}
 			if (++giftCounter >= 10) { // 每0.5秒检查玩家扔给友好生物的礼物
 				giftCounter = 0;
 				GiftActions.tick(server);
@@ -449,11 +456,11 @@ public class MobMindMod implements ModInitializer {
 				deathRecoveryCounter = 0;
 				com.mobmind.behavior.DeathItemRecovery.tick(server);
 			}
-			if (++pathBlockCounter >= 10) { // 每0.5秒检查一次玩家挡路
+			if (++pathBlockCounter >= 20) { // 每1秒检查一次玩家挡路（降低频率）
 				pathBlockCounter = 0;
 				tickPathBlocking(server);
 			}
-			if (++stuckCheckCounter >= 20) { // 每秒检查一次生物是否卡住
+			if (++stuckCheckCounter >= 40) { // 每2秒检查一次生物是否卡住（降低频率）
 				stuckCheckCounter = 0;
 				tickStuckDetection(server);
 			}
@@ -466,12 +473,12 @@ public class MobMindMod implements ModInitializer {
 		LOGGER.info("[MobMind] 生物AI智慧系统已初始化");
 	}
 
-	/** 检测玩家是否挡在生物去路上，被挡约5秒后才触发让开提示，降低灵敏度 */
+	/** 检测玩家是否挡在生物去路上，大幅提高触发门槛，必须真的被挡住很久才提示 */
 	private static void tickPathBlocking(net.minecraft.server.MinecraftServer server) {
 		for (net.minecraft.server.level.ServerPlayer player : server.getPlayerList().getPlayers()) {
 			if (!player.isAlive() || player.isSpectator()) continue;
 			net.minecraft.server.level.ServerLevel level = (net.minecraft.server.level.ServerLevel) player.level();
-			AABB box = player.getBoundingBox().inflate(4.0);
+			AABB box = player.getBoundingBox().inflate(2.0); // 缩小检测范围到2格
 			List<Mob> nearby = level.getEntitiesOfClass(Mob.class, box, m ->
 					m.isAlive() && PersonaRegistry.supports(m) && m != player.getVehicle());
 			for (Mob mob : nearby) {
@@ -488,17 +495,17 @@ public class MobMindMod implements ModInitializer {
 					BLOCKED_TICKS.remove(mid);
 					continue;
 				}
-				// 玩家必须在生物正前方（角度<45度，更严格）
+				// 玩家必须在生物正前方（角度<32度，非常严格）
 				Vec3 mobLook = mob.getLookAngle().normalize();
 				Vec3 toPlayer = player.position().subtract(mob.position()).normalize();
 				double dot = mobLook.dot(toPlayer);
-				if (dot < 0.7) { // 角度小于45度才算在正前方
+				if (dot < 0.85) { // 角度小于32度才算在正前方
 					BLOCKED_TICKS.remove(mid);
 					continue;
 				}
-				// 距离必须非常近（1.8格以内，几乎贴在一起）
+				// 距离必须贴得非常近（1.0格以内，几乎脸贴脸）
 				double dist = mob.distanceTo(player);
-				if (dist > 1.8) {
+				if (dist > 1.0) {
 					BLOCKED_TICKS.remove(mid);
 					continue;
 				}
@@ -507,7 +514,7 @@ public class MobMindMod implements ModInitializer {
 				boolean isFriendTryingToApproach = false;
 				if (!hasNavTarget) {
 					int f = MobMindState.friendship(mob, player.getUUID());
-					if (f >= 60 && dist < 1.5) {
+					if (f >= 80 && dist < 0.8) { // 友谊≥80且几乎贴在一起才认为是想靠近
 						isFriendTryingToApproach = true;
 					}
 				}
@@ -515,19 +522,19 @@ public class MobMindMod implements ModInitializer {
 					BLOCKED_TICKS.remove(mid);
 					continue;
 				}
-				// 必须几乎完全不动（速度非常小）
+				// 必须完全不动（速度极小）
 				Vec3 vel = mob.getDeltaMovement();
 				double speed = Math.sqrt(vel.x * vel.x + vel.z * vel.z);
-				if (speed > 0.05) {
+				if (speed > 0.02) {
 					BLOCKED_TICKS.remove(mid);
 					continue;
 				}
 				if (cur < 0) continue;
 				int ticks = cur + 1;
 				BLOCKED_TICKS.put(mid, ticks);
-				// 被挡约5秒（10次检测，每次0.5秒）才说让开，大幅降低灵敏度
-				if (ticks >= 10) {
-					BLOCKED_TICKS.put(mid, -120); // 触发后冷却约60秒
+				// 被挡连续12秒才说让开（每1秒检测一次，需要连续12次）
+				if (ticks >= 12) {
+					BLOCKED_TICKS.put(mid, -300); // 触发后冷却约150秒（2分半），避免频繁提示
 					MobAiService.onPlayerBlockingPath(mob, player);
 				}
 			}
@@ -536,13 +543,13 @@ public class MobMindMod implements ModInitializer {
 
 	/**
 	 * 检测生物是否卡住（掉坑、被方块困住、长时间不动等），并触发求救。
-	 * 每秒检测一次；必须真被困住（长时间不动+尝试移动/跳跃，或被方块埋住）才触发，降低误报。
+	 * 大幅提高触发门槛：必须真被困住很久、友好度足够、在视野内才会求救，大幅降低误报。
 	 */
 	private static void tickStuckDetection(net.minecraft.server.MinecraftServer server) {
 		for (net.minecraft.server.level.ServerLevel level : server.getAllLevels()) {
 			for (ServerPlayer player : server.getPlayerList().getPlayers()) {
 				if (player.level() != level) continue;
-				AABB checkBox = player.getBoundingBox().inflate(48.0);
+				AABB checkBox = player.getBoundingBox().inflate(16.0); // 缩小检测范围到16格
 				List<Mob> nearbyMobs = level.getEntitiesOfClass(Mob.class, checkBox,
 						m -> m.isAlive() && PersonaRegistry.supports(m) && !m.isNoAi());
 				for (Mob mob : nearbyMobs) {
@@ -550,8 +557,16 @@ public class MobMindMod implements ModInitializer {
 					Vec3 pos = mob.position();
 					double[] prev = STUCK_TRACKER.get(mid);
 
+					// 战斗中/骑乘中不检测
 					if (mob.getTarget() != null || mob.getLastHurtByMob() != null
 							|| mob.isPassenger() || mob.isVehicle()) {
+						STUCK_TRACKER.remove(mid);
+						continue;
+					}
+
+					// 只有友好度≥30的生物才向玩家求救（陌生人/敌对生物不随便喊救命）
+					int friendship = MobMindState.friendship(mob, player.getUUID());
+					if (friendship < 30) {
 						STUCK_TRACKER.remove(mid);
 						continue;
 					}
@@ -568,12 +583,11 @@ public class MobMindMod implements ModInitializer {
 							&& isSolid(level, mobPos.east()) && isSolid(level, mobPos.west());
 
 					// 真的被困住：在地上+四周都是墙+头被盖住（牢笼/坑），或正在窒息
-					// 需要连续检测到3次（3秒）才触发，避免偶尔卡一下就喊
 					boolean reallyTrapped = (feetInBlock && surrounded) || (onGround && surrounded && headBlocked);
 
 					// 检测是否在跳跃（Y轴速度为正，试图跳出去）
 					Vec3 vel = mob.getDeltaMovement();
-					boolean isJumping = vel.y > 0.15;
+					boolean isJumping = vel.y > 0.2; // 提高跳跃阈值，必须是明显在跳
 
 					if (prev == null) {
 						STUCK_TRACKER.put(mid, new double[]{pos.x, pos.y, pos.z, 0});
@@ -588,15 +602,15 @@ public class MobMindMod implements ModInitializer {
 					PathNavigation nav = mob.getNavigation();
 					boolean isTryingToMove = nav.isInProgress() && nav.getTargetPos() != null;
 
-					// 几乎没动（水平<0.2格）且：要么在尝试移动走不了，要么在跳跃出不去，要么被方块困住
-					if (distSq < 0.04 && Math.abs(dy) < 0.5) {
+					// 必须几乎完全不动（水平<0.1格）且：要么真的被方块困住，要么在明显尝试移动走不了，要么在跳跃出不去
+					if (distSq < 0.01 && Math.abs(dy) < 0.3) {
 						if (reallyTrapped || isTryingToMove || isJumping) {
 							double stuckTicks = prev[3] + 1;
 							STUCK_TRACKER.put(mid, new double[]{pos.x, pos.y, pos.z, stuckTicks});
-							// 被方块困住：连续8秒才喊；其他情况（撞墙/跳不出去）：连续12秒才喊
-							double threshold = reallyTrapped ? 8 : 12;
+							// 被方块困住：连续20秒才喊（每2秒检测一次，10次）；其他情况（撞墙/跳不出去）：连续30秒才喊（15次）
+							double threshold = reallyTrapped ? 10 : 15;
 							if (stuckTicks >= threshold) {
-								// 只有能看见玩家时才求救，隔墙不喊
+								// 必须能直接看见玩家（无遮挡）
 								if (!mob.hasLineOfSight(player)) {
 									STUCK_TRACKER.put(mid, new double[]{pos.x, pos.y, pos.z, 0});
 									continue;
@@ -611,15 +625,15 @@ public class MobMindMod implements ModInitializer {
 								} else {
 									stuckType = 2; // 撞墙/路被挡
 								}
-								STUCK_TRACKER.put(mid, new double[]{pos.x, pos.y, pos.z, 0});
+								STUCK_TRACKER.put(mid, new double[]{pos.x, pos.y, pos.z, -150}); // 触发后冷却5分钟
 								MobAiService.onStuck(mob, stuckType);
 							}
 						} else {
 							// 没在尝试移动也没被困也没跳，只是站着，不算卡住
 							STUCK_TRACKER.put(mid, new double[]{pos.x, pos.y, pos.z, 0});
 						}
-					} else {
-						// 在移动，重置卡住计数
+					} else if (prev[3] >= 0) {
+						// 在移动，重置卡住计数（冷却中不重置）
 						STUCK_TRACKER.put(mid, new double[]{pos.x, pos.y, pos.z, 0});
 					}
 				}
@@ -684,6 +698,74 @@ public class MobMindMod implements ModInitializer {
 		return stack.is(net.minecraft.world.item.Items.ARROW)
 				|| stack.is(net.minecraft.world.item.Items.SPECTRAL_ARROW)
 				|| stack.is(net.minecraft.world.item.Items.TIPPED_ARROW);
+	}
+
+	/**
+	 * 评估物品的"战力评分"，用于判断是否应该替换旧装备。
+	 * 评分越高越好：材质等级 + 附魔加成 + 耐久加成。
+	 */
+	private static int getItemScore(ItemStack stack) {
+		if (stack == null || stack.isEmpty()) return 0;
+		int score = 0;
+		net.minecraft.world.item.Item item = stack.getItem();
+
+		// 1. 材质等级（Tier）
+		String itemName = BuiltInRegistries.ITEM.getKey(item).toString();
+		if (itemName.contains("netherite")) score += 500;
+		else if (itemName.contains("diamond")) score += 400;
+		else if (itemName.contains("iron")) score += 300;
+		else if (itemName.contains("stone") || itemName.contains("chainmail")) score += 200;
+		else if (itemName.contains("golden")) score += 150;
+		else if (itemName.contains("wooden") || itemName.contains("leather")) score += 100;
+
+		// 2. 附魔加成：每个附魔+等级*20分
+		var enchantments = stack.get(net.minecraft.core.component.DataComponents.ENCHANTMENTS);
+		if (enchantments != null) {
+			for (var entry : enchantments.entrySet()) {
+				score += entry.getIntValue() * 20;
+			}
+		}
+
+		// 3. 耐久度加成（剩余耐久比例）
+		if (stack.isDamageableItem()) {
+			int max = stack.getMaxDamage();
+			int damage = stack.getDamageValue();
+			if (max > 0) score += (int)((max - damage) * 0.5);
+		}
+
+		// 4. 盾牌特殊：有附魔的比没附魔的好
+		if (GiftActions.isShield(stack)) score += 200;
+
+		return score;
+	}
+
+	/**
+	 * 判断新物品是否比旧物品好（应该替换旧物品）。
+	 * 同类型物品（如都是铁剑）比较评分，有附魔/更好耐久的更好；
+	 * 不同类型比较材质等级。
+	 */
+	private static boolean isBetterItem(ItemStack newStack, ItemStack oldStack) {
+		if (oldStack == null || oldStack.isEmpty()) return true;
+		if (newStack == null || newStack.isEmpty()) return false;
+		// 同类型物品：比较评分
+		if (newStack.getItem() == oldStack.getItem()) {
+			return getItemScore(newStack) > getItemScore(oldStack);
+		}
+		// 不同类型：看材质等级/评分
+		return getItemScore(newStack) > getItemScore(oldStack);
+	}
+
+	/**
+	 * 判断生物是否能使用玩家给的装备（武器/盾牌/盔甲/弹药/图腾）。
+	 * 只有铜傀儡不能装备——它有自己的整理箱子功能，强行setItemSlot会导致物品被AI丢弃造成复制bug。
+	 * 铁傀儡、雪傀儡等其他所有生物都可以接收装备。
+	 */
+	private static boolean canUseEquipment(Mob mob) {
+		String id = BuiltInRegistries.ENTITY_TYPE.getKey(mob.getType()).toString();
+		if ("minecraft:copper_golem".equals(id)) {
+			return false;
+		}
+		return true;
 	}
 
 	private static int cmdRecall(CommandContext<CommandSourceStack> ctx, int count) {

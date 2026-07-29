@@ -56,7 +56,13 @@ public class WeaponRangedAttackGoal extends Goal {
 
 	public static boolean isHoldingRangedWeapon(Mob mob) {
 		ItemStack main = mob.getMainHandItem();
-		return main.getItem() instanceof BowItem || main.getItem() instanceof CrossbowItem;
+		return main.getItem() instanceof BowItem
+				|| main.getItem() instanceof CrossbowItem
+				|| main.getItem() instanceof net.minecraft.world.item.TridentItem;
+	}
+
+	public static boolean isHoldingTrident(Mob mob) {
+		return mob.getMainHandItem().getItem() instanceof net.minecraft.world.item.TridentItem;
 	}
 
 	public static boolean isHoldingBow(Mob mob) {
@@ -212,9 +218,44 @@ public class WeaponRangedAttackGoal extends Goal {
 
 		if (isHoldingCrossbow(mob)) {
 			tickCrossbow(target);
+		} else if (isHoldingTrident(mob)) {
+			tickTrident(target);
 		} else {
 			tickBow(target);
 		}
+	}
+
+	private void tickTrident(LivingEntity target) {
+		// 三叉戟不需要拉弓充能，冷却到了直接投掷（像溺尸一样）
+		if (attackTime > 0) {
+			attackTime--;
+			return;
+		}
+		if (canSeeTargetWhileCharging()) {
+			shootTrident(target);
+			attackTime = attackIntervalMin;
+		}
+	}
+
+	private void shootTrident(LivingEntity target) {
+		if (!(mob.level() instanceof ServerLevel level)) return;
+		// 创建三叉戟投射物（像溺尸一样，不消耗手中的三叉戟物品——无限投掷）
+		net.minecraft.world.entity.projectile.arrow.ThrownTrident trident =
+				new net.minecraft.world.entity.projectile.arrow.ThrownTrident(level, mob, new ItemStack(Items.TRIDENT));
+		trident.setPos(mob.getX(), mob.getEyeY() - 0.1, mob.getZ());
+
+		double dx = target.getX() - mob.getX();
+		double dy = target.getY(0.3333333333333333D) - trident.getY();
+		double dz = target.getZ() - mob.getZ();
+		float velocity = 1.6f;
+		int deviation = 14 - level.getDifficulty().getId() * 4;
+		trident.shoot(dx, dy, dz, velocity, deviation);
+
+		trident.pickup = AbstractArrow.Pickup.DISALLOWED; // 不能被捡起
+
+		level.addFreshEntity(trident);
+		mob.playSound(net.minecraft.sounds.SoundEvents.TRIDENT_THROW.value(), 1f,
+				1f / (mob.getRandom().nextFloat() * 0.4f + 0.8f));
 	}
 
 	private void tickBow(LivingEntity target) {

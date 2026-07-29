@@ -29,8 +29,14 @@ public final class ItemCatalog {
 
 	private ItemCatalog() {}
 
-	/** 在一段文本中识别出的物品（含数量） */
-	public record MatchedItem(Item item, String name, int count) {}
+	/** 在一段文本中识别出的物品（含数量、药水效果） */
+	public record MatchedItem(Item item, String name, int count,
+							   net.minecraft.core.Holder<net.minecraft.world.item.alchemy.Potion> potion) {
+		/** 向后兼容：无药水效果的物品 */
+		public MatchedItem(Item item, String name, int count) {
+			this(item, name, count, null);
+		}
+	}
 
 	/**
 	 * 在自由文本里找物品名（如"三个铁锭换面包"）。
@@ -58,9 +64,9 @@ public final class ItemCatalog {
 		boolean[] consumed = new boolean[text.length()];
 		// 英文模式下优先匹配英文物品名，再回退中文
 		if (english) {
-			matchCatalog(text, en(), consumed, result, true);
+			matchCatalog(text, en(), POTION_BY_EN, consumed, result, true);
 		}
-		matchCatalog(text, zh(), consumed, result, false);
+		matchCatalog(text, zh(), POTION_BY_ZH, consumed, result, false);
 		// 按在原文中的位置排序
 		result.sort(java.util.Comparator.comparingInt((MatchedItem m) -> {
 			int p = text.indexOf(m.name());
@@ -69,8 +75,9 @@ public final class ItemCatalog {
 		return result;
 	}
 
-	private static void matchCatalog(String text, Map<String, Item> catalog, boolean[] consumed,
-									 List<MatchedItem> result, boolean lowerKey) {
+	private static void matchCatalog(String text, Map<String, Item> catalog,
+									 Map<String, net.minecraft.core.Holder<net.minecraft.world.item.alchemy.Potion>> potionMap,
+									 boolean[] consumed, List<MatchedItem> result, boolean lowerKey) {
 		List<String> keys = new ArrayList<>(catalog.keySet());
 		keys.sort((a, b) -> Integer.compare(b.length(), a.length()));
 		for (String key : keys) {
@@ -85,7 +92,9 @@ public final class ItemCatalog {
 				}
 				if (!overlap) {
 					for (int i = pos; i < end && i < consumed.length; i++) consumed[i] = true;
-					result.add(new MatchedItem(catalog.get(key), key, countBefore(text, pos, lowerKey)));
+					net.minecraft.core.Holder<net.minecraft.world.item.alchemy.Potion> potion =
+							(potionMap != null) ? potionMap.get(key) : null;
+					result.add(new MatchedItem(catalog.get(key), key, countBefore(text, pos, lowerKey), potion));
 				}
 				pos = searchText.indexOf(searchKey, pos + 1);
 			}

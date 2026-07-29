@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "mobmind",
   "version": "${version}",
-  "name": "MobMind 生物AI",
+  "name": "MobMind - 生物心智",
   "description": "为 Minecraft 生物赋予独立 AI 人格：语音对话、好感度、行为影响。",
   "authors": ["MobMind"],
   "license": "MIT",

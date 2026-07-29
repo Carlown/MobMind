@@ -30,7 +30,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * - 默认只召唤最近的 recallCount 只（配置文件默认 2），0 = 召唤全部
  * - 支持 Ctrl+X 将召唤来的生物送回原位
  * - 支持 /mobmind recall <数量> 指令临时指定数量并持久化到配置
- * - 支持跨维度传送，10秒冷却
+ * - 只召唤当前维度的友好生物，不跨维度召唤，10秒冷却
  * - 友军不会互殴（见 LivingEntityMixin 的 areAllies 检查）
  */
 public final class FriendRecall {
@@ -147,7 +147,7 @@ public final class FriendRecall {
 	}
 
 	/**
-	 * 召唤友好生物
+	 * 召唤友好生物（只召唤当前维度的，不跨维度）
 	 * @param count 召唤数量（最近的N个），0=全部
 	 * @param fromCommand 是否来自指令（来自指令时保存到配置）
 	 */
@@ -178,9 +178,11 @@ public final class FriendRecall {
 		// 检查玩家是否用朋友选择器选中了特定朋友
 		java.util.Set<UUID> selectedIds = FriendSelectorItem.getSelectedFriends(playerId);
 		boolean hasSelection = !selectedIds.isEmpty();
+		int selectedOtherDim = 0;
 
 		// 收集当前维度的友好生物（不跨维度召唤）
 		List<MobWithDist> friends = new ArrayList<>();
+		java.util.Set<UUID> selectedInThisDim = new java.util.HashSet<>();
 		AABB searchBox = new AABB(
 				targetLevel.getWorldBorder().getMinX(), -64, targetLevel.getWorldBorder().getMinZ(),
 				targetLevel.getWorldBorder().getMaxX(), 384, targetLevel.getWorldBorder().getMaxZ()
@@ -195,11 +197,35 @@ public final class FriendRecall {
 			if (mob instanceof net.minecraft.world.entity.boss.wither.WitherBoss) continue;
 			if (!MobMindConfig.get().recallVillagers && mob instanceof AbstractVillager) continue;
 
+			// 记录当前维度中符合条件的选中朋友
+			if (hasSelection && selectedIds.contains(mob.getUUID())) {
+				selectedInThisDim.add(mob.getUUID());
+			}
+
 			// 如果有选中的朋友，只召唤选中的
 			if (hasSelection && !selectedIds.contains(mob.getUUID())) continue;
 
 			double dist = mob.distanceToSqr(player);
-			friends.add(new MobWithDist(mob, targetLevel, dist, true));
+			friends.add(new MobWithDist(mob, dist));
+		}
+
+		// 如果有选中的朋友，统计有多少选中的朋友确实在其他维度（存在于其他维度且活着）
+		if (hasSelection) {
+			for (UUID selectedId : selectedIds) {
+				if (selectedInThisDim.contains(selectedId)) continue;
+				// 检查这个生物是否在其他维度存在且活着
+				boolean inOtherDim = false;
+				for (ServerLevel level : server.getAllLevels()) {
+					if (level == targetLevel) continue;
+					if (level.getEntity(selectedId) instanceof Mob m && m.isAlive()) {
+						inOtherDim = true;
+						break;
+					}
+				}
+				if (inOtherDim) {
+					selectedOtherDim++;
+				}
+			}
 		}
 
 		// 按距离排序（最近的优先）
@@ -208,17 +234,15 @@ public final class FriendRecall {
 		// 如果有选中的朋友，召唤所有选中的；否则按配置数量召唤
 		int maxCount = hasSelection ? friends.size() : ((count <= 0) ? friends.size() : count);
 		int recalled = 0;
-		int crossDim = 0;
 		List<Vec3> usedPositions = new ArrayList<>();
 
 		for (int i = 0; i < Math.min(maxCount, friends.size()); i++) {
 			MobWithDist entry = friends.get(i);
 			Mob mob = entry.mob;
-			ServerLevel level = entry.level;
 
 			// 记录原始位置（如果还没记录过，避免重复召唤覆盖原始位置）
 			if (!RECALLED_MOBS.containsKey(mob.getUUID())) {
-				ResourceKey<Level> originKey = level.dimension();
+				ResourceKey<Level> originKey = targetLevel.dimension();
 				RECALLED_MOBS.put(mob.getUUID(), new RecallOrigin(originKey, mob.getX(), mob.getY(), mob.getZ()));
 			}
 
@@ -230,16 +254,7 @@ public final class FriendRecall {
 			}
 			usedPositions.add(safePos);
 
-			double tx = safePos.x;
-			double ty = safePos.y;
-			double tz = safePos.z;
-
-			if (entry.sameDim) {
-				mob.teleportTo(tx, ty, tz);
-			} else {
-				mob.teleportTo(targetLevel, tx, ty, tz, Set.of(), mob.getYRot(), mob.getXRot(), false);
-				crossDim++;
-			}
+			mob.teleportTo(safePos.x, safePos.y, safePos.z);
 
 			// 清除攻击目标，专注跟随玩家
 			mob.setTarget(null);
@@ -272,15 +287,21 @@ public final class FriendRecall {
 		}
 
 		if (recalled == 0) {
-			player.sendSystemMessage(Component.translatable("status.mobmind.recall.none"));
-		} else if (fromCommand) {
-			player.sendSystemMessage(Component.translatable("status.mobmind.recall.set", countStr,
-					String.valueOf(recalled), String.valueOf(crossDim > 0 ? crossDim : 0)));
-		} else if (crossDim > 0) {
-			player.sendSystemMessage(Component.translatable("status.mobmind.recall.success_crossdim",
-					String.valueOf(recalled), String.valueOf(crossDim)));
+			if (selectedOtherDim > 0) {
+				player.sendSystemMessage(Component.translatable("status.mobmind.recall.other_dimension", String.valueOf(selectedOtherDim)));
+			} else {
+				player.sendSystemMessage(Component.translatable("status.mobmind.recall.none"));
+			}
 		} else {
-			player.sendSystemMessage(Component.translatable("status.mobmind.recall.success", String.valueOf(recalled)));
+			if (selectedOtherDim > 0) {
+				player.sendSystemMessage(Component.translatable("status.mobmind.recall.success_other_dim",
+						String.valueOf(recalled), String.valueOf(selectedOtherDim)));
+			} else if (fromCommand) {
+				player.sendSystemMessage(Component.translatable("status.mobmind.recall.set", countStr,
+						String.valueOf(recalled)));
+			} else {
+				player.sendSystemMessage(Component.translatable("status.mobmind.recall.success", String.valueOf(recalled)));
+			}
 		}
 	}
 
@@ -357,7 +378,7 @@ public final class FriendRecall {
 					if (py > 0) break;
 				}
 
-				// 如果附近没找到，尝试用Heightmap找地面（跨维度时常用）
+				// 如果附近没找到，尝试用Heightmap找地面
 				if (py < 0) {
 					int surfaceY = level.getHeightmapPos(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
 							BlockPos.containing(px, center.y, pz)).getY();
@@ -403,19 +424,5 @@ public final class FriendRecall {
 		return null;
 	}
 
-	/**
-	 * 同维度安全传送（备用，保持兼容性）。
-	 * 找(x,z)位置处最高的可站立点，要求两格高空气。
-	 */
-	private static void safeTeleport(Mob mob, ServerLevel level, double x, double y, double z) {
-		Vec3 safe = findSafePosition(level, new Vec3(x, y, z), new ArrayList<>(), 1);
-		if (safe != null) {
-			mob.teleportTo(safe.x, safe.y, safe.z);
-		} else {
-			// 兜底：直接传送
-			mob.teleportTo(x, y, z);
-		}
-	}
-
-	private record MobWithDist(Mob mob, ServerLevel level, double dist, boolean sameDim) {}
+	private record MobWithDist(Mob mob, double dist) {}
 }

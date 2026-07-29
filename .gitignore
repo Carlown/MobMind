@@ -9,6 +9,7 @@ classes/
 .idea/
 *.class
 *.log
+build_log.txt
 
 # Eclipse
 .classpath

@@ -5,6 +5,8 @@ import net.minecraft.world.entity.ConversionParams;
 import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.npc.villager.Villager;
+import net.minecraft.world.entity.monster.zombie.ZombieVillager;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -15,7 +17,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  * - 好感度、激怒、安抚标记
  * - 人格、对话历史
  * - 弹药、不死图腾、武器标记
+ * - 行为指令（跟随/停留）、砍价记录
  * - 僵尸村民治愈状态
+ * 僵尸村民被治愈为村民时，额外给治愈者加大量好感度，确保治愈后保持友好可召唤。
+ * 村民被雷劈变成女巫时，通过 convertTo 或 VillagerMixin 后备机制保留所有记忆。
  */
 @Mixin(Mob.class)
 public abstract class MobTransformationMixin {
@@ -48,63 +53,30 @@ public abstract class MobTransformationMixin {
 
 	// ---------- 数据迁移 ----------
 
+	@SuppressWarnings("unchecked")
 	private static void transferData(Mob oldMob, Mob newMob) {
 		java.util.UUID oldId = oldMob.getUUID();
 		java.util.UUID newId = newMob.getUUID();
+		boolean isZombieVillagerCured = oldMob instanceof ZombieVillager && newMob instanceof Villager;
 
-		if (MobMindState.hasPlayerGivenWeapon(oldMob)) {
-			MobMindState.markPlayerGivenWeapon(newId);
+		// 先迁移所有 MobMind 数据（好感度、人格、对话历史、弹药等）
+		MobMindState.transferAllData(oldId, newId, newMob);
+
+		// 僵尸村民治愈完成：给治愈者加大量好感度（至少80，达到友好可召唤）
+		if (isZombieVillagerCured) {
+			java.util.UUID healerId = null;
+			Object curing = MobMindState.getCuringData(newId);
+			if (curing instanceof java.util.Map<?, ?> map) {
+				healerId = (java.util.UUID) map.get("healer");
+			}
 			newMob.setPersistenceRequired();
-		}
-
-		java.util.Map<java.util.UUID, Integer> friendship = MobMindState.getAllFriendship(oldId);
-		if (friendship != null) {
-			for (java.util.Map.Entry<java.util.UUID, Integer> e : friendship.entrySet()) {
-				MobMindState.setFriendship(newId, e.getKey(), e.getValue());
+			if (healerId != null) {
+				int curFriendship = MobMindState.friendship(newMob, healerId);
+				MobMindState.setFriendship(newId, healerId, Math.max(curFriendship, 80));
+				com.mobmind.MobMindMod.LOGGER.info("[MobMind] 僵尸村民治愈完成: {} 被治愈，对治愈者好感度设为{}",
+						newMob.getType().getDescription().getString(), Math.max(curFriendship, 80));
 			}
+			MobMindState.onZombieVillagerCured(newMob);
 		}
-
-		java.util.Map<java.util.UUID, Long> provoked = MobMindState.getAllProvoked(oldId);
-		if (provoked != null) {
-			for (java.util.Map.Entry<java.util.UUID, Long> e : provoked.entrySet()) {
-				MobMindState.setProvoked(newId, e.getKey(), e.getValue());
-			}
-		}
-
-		java.util.Map<java.util.UUID, Long> calmed = MobMindState.getAllCalmed(oldId);
-		if (calmed != null) {
-			for (java.util.Map.Entry<java.util.UUID, Long> e : calmed.entrySet()) {
-				MobMindState.setCalmed(newId, e.getKey(), e.getValue());
-			}
-		}
-
-		Object personality = MobMindState.getPersonalityData(oldId);
-		if (personality != null) {
-			MobMindState.setPersonalityData(newId, personality);
-		}
-
-		Object convHistory = MobMindState.getConversationHistoryData(oldId);
-		if (convHistory != null) {
-			MobMindState.setConversationHistoryData(newId, convHistory);
-		}
-
-		java.util.Map<String, Integer> ammo = MobMindState.getAllAmmo(oldId);
-		if (ammo != null) {
-			for (java.util.Map.Entry<String, Integer> e : ammo.entrySet()) {
-				MobMindState.setAmmo(newId, e.getKey(), e.getValue());
-			}
-		}
-
-		int totems = MobMindState.getTotemCount(oldId);
-		if (totems > 0) {
-			MobMindState.setTotemCount(newId, totems);
-		}
-
-		Object curing = MobMindState.getCuringData(oldId);
-		if (curing != null) {
-			MobMindState.setCuringData(newId, curing);
-		}
-
-		MobMindState.clearEntityData(oldId);
 	}
 }

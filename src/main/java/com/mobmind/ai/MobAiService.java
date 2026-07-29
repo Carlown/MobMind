@@ -13,6 +13,7 @@ import com.mobmind.config.MobMindConfig;
 import com.mobmind.net.MobPackets;
 import com.mobmind.persona.PersonaRegistry;
 import com.mobmind.persona.Personality;
+import com.mobmind.persona.PersonalityGenerator;
 import com.mobmind.state.MobMindState;
 import com.mobmind.util.EnvironmentSense;
 import com.mobmind.util.ItemCatalog;
@@ -138,7 +139,7 @@ public final class MobAiService {
 	}
 
 	/** 获取生物类型的英文名称（用于英文模式显示） */
-	private static String getEnglishMobName(Mob mob) {
+	public static String getEnglishMobName(Mob mob) {
 		var key = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(mob.getType());
 		if (key == null) return "Mob";
 		String path = key.getPath();
@@ -155,7 +156,7 @@ public final class MobAiService {
 	}
 
 	/** 获取物品的英文名称（用于英文模式下的商品列表和物品引用） */
-	private static String getEnglishItemName(net.minecraft.world.item.ItemStack stack) {
+	public static String getEnglishItemName(net.minecraft.world.item.ItemStack stack) {
 		if (stack == null || stack.isEmpty()) return "empty";
 		var key = net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(stack.getItem());
 		if (key == null) return stack.getHoverName().getString();
@@ -290,20 +291,35 @@ public final class MobAiService {
 		MobMindState.adjustFriendship(mob, playerId, -12);
 		long gameTime = mob.level().getLevelData().getGameTime();
 		MobMindState.clearCalm(mob, playerId); // 动手即撕毁和解
-		MobMindState.provoke(mob, playerId, gameTime + 6000); // 激怒5分钟，允许还手
-		// 主动锁定玩家，确保生物（包括持武器/盾牌生物）会追击/还手
-		mob.setTarget(player);
+		com.mobmind.persona.PersonalityGenerator.Category cat = MobMindState.categoryOf(mob);
+		mob.setLastHurtByMob(player);
+
+		if (cat == com.mobmind.persona.PersonalityGenerator.Category.PASSIVE) {
+			// 被动生物（村民等）：被打后害怕，逃跑2分钟
+			MobMindState.setOrder(mob, MobMindState.OrderType.FLEE, playerId, gameTime + 2400);
+			mob.setTarget(null); // 被动生物不设攻击目标
+		} else {
+			// 能战斗的生物（HOSTILE/NEUTRAL）：激怒5分钟，锁定玩家
+			MobMindState.provoke(mob, playerId, gameTime + 6000);
+			if (mob instanceof NeutralMob) {
+				mob.setTarget(player);
+			}
+			mob.setTarget(player);
+		}
 
 		// AI 对话反应（20秒冷却，避免被连击时刷屏）
 		long now = System.currentTimeMillis();
 		Long last = LAST_HURT_REACT.get(mob.getUUID());
 		if (last != null && now - last < 20000) return;
 		LAST_HURT_REACT.put(mob.getUUID(), now);
-		respond(player, mob, t("（你突然攻击了它）", "(The player suddenly attacked you)", playerId), true);
+		respond(player, mob, t(
+				"（玩家" + player.getGameProfile().name() + "突然攻击了你，你受伤了但还活着。用符合你性格的方式反应：愤怒、恐惧、或质问）",
+				"(Player " + player.getGameProfile().name() + " suddenly attacked you. You are hurt but still alive. React in character: anger, fear, or demand an explanation)",
+				playerId), true);
 		spreadGossip(player, mob);
 	}
 
-	/** 群体关系网络：受害者向附近同族传播流言，同族相信后降低对玩家的好感度并可能议论 */
+	/** 群体关系网络：受害者向附近同族传播流言，同族相信后降低对玩家的好感度、被激怒并可能议论 */
 	private static void spreadGossip(ServerPlayer player, Mob victim) {
 		java.util.UUID playerId = player.getUUID();
 		MobMindConfig cfg = MobMindConfig.get();
@@ -321,17 +337,77 @@ public final class MobAiService {
 		Collections.shuffle(peers);
 		int limit = Math.min(3, peers.size());
 		String victimName = victim.getType().getDescription().getString();
+		long gameTime = victim.level().getLevelData().getGameTime();
+
+		// 同时通知附近的铁傀儡（如果受害者是村民/流浪商人），铁傀儡会守护村民
+		String victimId = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE
+				.getKey(victim.getType()).toString();
+		boolean isVillagerType = "minecraft:villager".equals(victimId)
+				|| "minecraft:wandering_trader".equals(victimId);
+		if (isVillagerType) {
+			AABB golemBox = victim.getBoundingBox().inflate(cfg.gossipRadius);
+			List<Mob> golems = victim.level().getEntitiesOfClass(Mob.class, golemBox,
+					g -> g.isAlive() && net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE
+							.getKey(g.getType()).toString().equals("minecraft:iron_golem"));
+			for (Mob golem : golems) {
+				MobMindState.adjustFriendship(golem, playerId, -cfg.gossipPenalty);
+				MobMindState.provoke(golem, playerId, gameTime + 4800); // 激怒4分钟
+				golem.setLastHurtByMob(player);
+				golem.setTarget(player);
+			}
+		}
 
 		for (int i = 0; i < limit; i++) {
 			Mob peer = peers.get(i);
 			if (peer.getRandom().nextInt(100) >= cfg.gossipChance) continue;
 			MobMindState.adjustFriendship(peer, playerId, -cfg.gossipPenalty);
+			com.mobmind.persona.PersonalityGenerator.Category cat = MobMindState.categoryOf(peer);
+			peer.setLastHurtByMob(player);
+			if (cat == com.mobmind.persona.PersonalityGenerator.Category.HOSTILE
+					|| cat == com.mobmind.persona.PersonalityGenerator.Category.NEUTRAL) {
+				// 能战斗的生物：激怒3分钟，能看到玩家则立刻锁定目标
+				MobMindState.provoke(peer, playerId, gameTime + 3600);
+				// NeutralMob 需要设置原生愤怒状态以保证追击
+				if (peer instanceof NeutralMob neutral) {
+					neutral.setTarget(player);
+					// 调用NeutralMob原生方法设置愤怒（不同版本方法名可能不同，直接用setTarget+setLastHurtByMob覆盖）
+					peer.setLastHurtByMob(player);
+				}
+				if (peer.getSensing().hasLineOfSight(player)) {
+					peer.setTarget(player);
+				}
+			} else if (cat == com.mobmind.persona.PersonalityGenerator.Category.PASSIVE) {
+				// 被动生物（村民等）：听到同族被打，害怕并逃跑1分钟
+				MobMindState.setOrder(peer, MobMindState.OrderType.FLEE, playerId, gameTime + 1200);
+				peer.setLastHurtByMob(player);
+				// 村民看到玩家会逃跑
+				if (peer.getSensing().hasLineOfSight(player)) {
+					peer.setTarget(null); // 被动生物不设攻击目标
+				}
+			}
 			MobMindMod.LOGGER.info("[MobMind] 流言传播: {} 听说玩家 {} 打了 {}, 好感度-{}",
 					peer.getType().getDescription().getString(), player.getGameProfile().name(), victimName, cfg.gossipPenalty);
 			if (peer.getRandom().nextInt(100) < cfg.gossipReactChance) {
-				respond(player, peer, isEnglishUi(playerId)
-						? "(You heard that player " + player.getGameProfile().name() + " attacked your fellow " + victimName + ". Your opinion of this player worsens. Comment on it in character to nearby peers)"
-						: "（你听说玩家" + player.getGameProfile().name() + "打了你的同族" + victimName + "，你对这个玩家的印象变差了。向旁边的同族议论一句，表达不满或警惕）", false);
+				boolean killed = !victim.isAlive();
+				String prompt;
+				if (isEnglishUi(playerId)) {
+					if (killed) {
+						prompt = "(A player named " + player.getGameProfile().name() + " just KILLED another " + victimName
+								+ " — a creature of your same species, NOT a human like the player. You are horrified and furious. Your opinion of this player drops sharply. Cry out in grief and anger to nearby peers of your kind)";
+					} else {
+						prompt = "(A player named " + player.getGameProfile().name() + " is attacking another " + victimName
+								+ " — a creature of your same species, NOT a human like the player. " + victimName + " is hurt but still alive. Your opinion of this player worsens. Warn your peers of your kind or shout at the player in character)";
+					}
+				} else {
+					if (killed) {
+						prompt = "（一个叫" + player.getGameProfile().name() + "的人类玩家刚刚杀了另一只" + victimName
+								+ "——它和你一样是" + victimName + "，而玩家是人类，不是你们的同类。你既震惊又愤怒，对这个玩家的好感大幅下降。向旁边的同伴哭喊怒骂）";
+					} else {
+						prompt = "（一个叫" + player.getGameProfile().name() + "的人类玩家正在攻击另一只" + victimName
+								+ "——它和你一样是" + victimName + "，而玩家是人类，不是你们的同类。" + victimName + "受伤了但还活着。你对这个玩家的印象变差了。向旁边的同伴喊话警告，或者冲着玩家叫骂）";
+					}
+				}
+				respond(player, peer, prompt, false);
 			}
 		}
 	}
@@ -713,6 +789,54 @@ public final class MobAiService {
 				: "（玩家" + player.getGameProfile().name() + "喂你吃了" + foodName + "，你感觉好多了。用符合你性格的方式回应）", false);
 	}
 
+	/** 玩家满血时丢食物给生物，生物存起来 */
+	public static void onFoodStored(Mob mob, ServerPlayer player, String foodName, int count) {
+		if (!PersonaRegistry.supports(mob)) return;
+		java.util.UUID playerId = player.getUUID();
+		long now = System.currentTimeMillis();
+		Long last = LAST_FOOD_REACT.get(mob.getUUID());
+		if (last != null && now - last < 5000) return;
+		LAST_FOOD_REACT.put(mob.getUUID(), now);
+		respond(player, mob, isEnglishUi(playerId)
+				? "(Player " + player.getGameProfile().name() + " gave you " + count + " " + foodName + " for later. You'll save it for when you're hurt. Respond in character, briefly thanking them)"
+				: "（玩家" + player.getGameProfile().name() + "给了你" + count + "个" + foodName + "存着。你打算留着受伤的时候吃。用符合你性格的方式简短道谢）", false);
+	}
+
+	/** 服务端 tick：低血量的友好生物自动吃存储的食物 */
+	private static final Map<UUID, Long> LAST_AUTO_EAT = new ConcurrentHashMap<>();
+
+	public static void tickAutoEatFood(MinecraftServer server) {
+		for (ServerLevel level : server.getAllLevels()) {
+			java.util.Set<UUID> seen = java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+			for (ServerPlayer player : level.players()) {
+				AABB box = player.getBoundingBox().inflate(64.0);
+				for (Mob mob : level.getEntitiesOfClass(Mob.class, box)) {
+					if (!seen.add(mob.getUUID())) continue;
+					if (!mob.isAlive()) continue;
+					if (!PersonaRegistry.supports(mob)) continue;
+					if (mob.getHealth() >= mob.getMaxHealth() * 0.7f) continue; // 血量>70%不吃
+					if (MobMindState.getStoredFoodCount(mob) <= 0) continue;
+
+					long now = level.getLevelData().getGameTime();
+					Long last = LAST_AUTO_EAT.get(mob.getUUID());
+					if (last != null && now - last < 60) continue; // 3秒冷却
+					LAST_AUTO_EAT.put(mob.getUUID(), now);
+
+					if (MobMindState.consumeStoredFood(mob)) {
+						mob.heal(4.0f); // 每份食物回4点血（统一值，不区分食物类型）
+						mob.level().playSound(null, mob.getX(), mob.getY(), mob.getZ(),
+								net.minecraft.sounds.SoundEvents.GENERIC_EAT,
+								net.minecraft.sounds.SoundSource.NEUTRAL, 1.0f, 1.0f);
+						MobMindMod.LOGGER.info("[MobMind] 自动吃食物: {} HP={}/{}",
+								mob.getType().getDescription().getString(),
+								String.format("%.0f", mob.getHealth()),
+								String.format("%.0f", mob.getMaxHealth()));
+					}
+				}
+			}
+		}
+	}
+
 	// ---------- 入口：玩家扔礼物给生物 ----------
 
 	private static final Map<UUID, Long> LAST_GIFT_REACT = new ConcurrentHashMap<>();
@@ -874,12 +998,15 @@ public final class MobAiService {
 			if (level.isClientSide()) continue;
 			long gameTime = level.getLevelData().getGameTime();
 			AABB box = player.getBoundingBox().inflate(16.0);
+			// 血量阈值从40%放宽到70%：掉了三分之一血就开始要食物，用户能感知到
+			// 只在存储食物吃完后才找玩家要
 			List<Mob> hungry = level.getEntitiesOfClass(Mob.class, box, m ->
 					m.isAlive()
 							&& PersonaRegistry.supports(m)
 							&& MobMindState.isFriendlyTo(m, playerId)
 							&& m.hasLineOfSight(player)
-							&& m.getHealth() < m.getMaxHealth() * 0.4f
+							&& m.getHealth() < m.getMaxHealth() * 0.7f
+							&& MobMindState.getStoredFoodCount(m) <= 0
 							&& !isInCombat(m));
 			if (hungry.isEmpty()) continue;
 			// 选血量比例最低的一只
@@ -889,9 +1016,16 @@ public final class MobAiService {
 			Long last = LAST_FOOD_REQUEST.get(mob.getUUID());
 			if (last != null && gameTime - last < 2400) continue; // 2分钟冷却
 			LAST_FOOD_REQUEST.put(mob.getUUID(), gameTime);
+			float hpPct = mob.getHealth() / mob.getMaxHealth();
+			MobMindMod.LOGGER.info("[MobMind] 求食物: {} HP={}/{}({}%) 玩家={}",
+					mob.getType().getDescription().getString(),
+					String.format("%.0f", mob.getHealth()),
+					String.format("%.0f", mob.getMaxHealth()),
+					String.format("%.0f%%", hpPct * 100),
+					player.getGameProfile().name());
 			respond(player, mob, isEnglishUi(playerId)
-					? "(You are hungry and low on health. Ask player " + player.getGameProfile().name() + " for some food. Whine, complain or just ask directly in character)"
-					: "（你肚子饿了，血量也不足，向玩家" + player.getGameProfile().name() + "要点吃的。用符合你性格的方式撒娇、抱怨或直接开口）", false);
+					? "(You are injured and low on health (" + String.format("%.0f%%", hpPct * 100) + "). You really hope player " + player.getGameProfile().name() + " can give you some food to heal. Act cute, complain about your wounds, or ask directly in character for something to eat.)"
+					: "（你受伤了，血量只剩" + String.format("%.0f%%", hpPct * 100) + "，你真心希望玩家" + player.getGameProfile().name() + "能给你点吃的补补血。用符合你性格的方式撒个娇、抱怨伤势、或者直接向玩家要吃的）", false);
 			return; // 每轮最多触发一次
 		}
 	}
@@ -1151,19 +1285,39 @@ public final class MobAiService {
 					bargain.item(), bargain.agree());
 			BarterActions.applyBargain(villager, player, persona, bargain.item(), bargain.agree());
 		}
+		// 砍价场景（bargain不为null）是修改交易界面价格，不应创建以物易物约定或记录赠送承诺
+		// （砍价对话中常出现"X换Y"和"给你"等字眼，容易被误识别为交易/赠送）
 		Barter barter = reply.barter();
-		if (barter == null && applyActions) { // 模型漏输出 barter 字段时，从对话文本兜底识别
+		if (barter == null && applyActions && bargain == null) { // 模型漏输出 barter 字段时，从对话文本兜底识别（砍价时不兜底）
 			barter = extractBarterFromText(lastUserText(mob.getUUID(), player.getUUID()), reply.say(), player.getUUID());
 		}
-		if (barter != null) { // 所有生物（含村民）都可以谈以物易物
+		if (barter != null && bargain == null) { // 砍价场景不创建以物易物约定
 			BarterActions.createDeal(mob, player, barter.gives(), barter.takes());
 		}
 
 		// 信守承诺：从生物台词中提取它答应给玩家的物品，记录为2分钟内有效的承诺
-		// 免费赠送（"送你XX"/"给你XX"）不需要玩家给东西，直接给；有条件承诺需要玩家先给东西
-		if (applyActions) {
-			PromisedItems promisedResult = extractPromisedItems(reply.say(), isEnglishUi(player.getUUID()));
+		// 免费赠送（"送你XX"/"给你XX"）不需要玩家给东西，直接给；
+		// 砍价场景（bargain不为null）或交易场景（玩家说"X换Y"）不记录任何承诺，回赠由barter系统处理
+		String lastUserMsg = lastUserText(mob.getUUID(), player.getUUID());
+		if (applyActions && bargain == null) {
+			PromisedItems promisedResult = extractPromisedItems(reply.say(), lastUserMsg, isEnglishUi(player.getUUID()));
 			List<ItemCatalog.MatchedItem> promised = promisedResult.items;
+
+			// 安全网：如果存在正式以物易物约定，过滤掉承诺物品中属于交易的物品
+			// （如"15个煤炭换1个绿宝石，给你绿宝石"不应被当成免费赠送提前发放，回赠由barter系统统一处理）
+			if (barter != null && !promised.isEmpty()) {
+				java.util.Set<net.minecraft.world.item.Item> barterItems = new java.util.HashSet<>();
+				for (ItemCatalog.MatchedItem g : barter.gives()) {
+					if (g != null && g.item() != null) barterItems.add(g.item());
+				}
+				for (ItemCatalog.MatchedItem t : barter.takes()) {
+					if (t != null && t.item() != null) barterItems.add(t.item());
+				}
+				promised = promised.stream()
+						.filter(m -> m != null && m.item() != null && !barterItems.contains(m.item()))
+						.collect(java.util.stream.Collectors.toList());
+			}
+
 			if (!promised.isEmpty()) {
 				List<MobMindState.BarterDeal.ItemRequirement> promisedReqs = new ArrayList<>();
 				for (ItemCatalog.MatchedItem m : promised) {
@@ -1183,9 +1337,14 @@ public final class MobAiService {
 		remember(mob.getUUID(), player.getUUID(), "user", lastUserText(mob.getUUID(), player.getUUID()));
 		remember(mob.getUUID(), player.getUUID(), "assistant", reply.say());
 
-		String mobName = isEnglishUi(player.getUUID())
-				? getEnglishMobName(mob)
-				: persona.name + "（" + mob.getType().getDescription().getString() + "）";
+		String mobName;
+		String englishMobType = getEnglishMobName(mob);
+		if (isEnglishUi(player.getUUID())) {
+			String englishNickname = PersonalityGenerator.generateEnglishName(mob.getUUID());
+			mobName = englishNickname + " (" + englishMobType + ")";
+		} else {
+			mobName = persona.name + "（" + mob.getType().getDescription().getString() + "）";
+		}
 		MobPackets.ReplyPayload packet = new MobPackets.ReplyPayload(
 				mob.getId(), mobName, reply.say(), reply.mood(), action, friendship,
 				player.getGameProfile().name(), persona.voiceId);
@@ -1240,7 +1399,7 @@ public final class MobAiService {
 		String alignmentDesc;
 		String displayName;
 		if (english) {
-			displayName = getEnglishMobName(mob); // English mode: use English mob type name
+			displayName = PersonalityGenerator.generateEnglishName(mob.getUUID());
 			alignmentDesc = persona.alignment != null
 					? translateAlignment(persona.alignment)
 					: "";
@@ -1451,8 +1610,10 @@ public final class MobAiService {
 				Item giveItem = ItemCatalog.byName(give);
 				Item takeItem = ItemCatalog.byName(take);
 				if (giveItem == null || takeItem == null) return null;
-				gives = List.of(new ItemCatalog.MatchedItem(giveItem, give, giveCount));
-				takes = List.of(new ItemCatalog.MatchedItem(takeItem, take, takeCount));
+				net.minecraft.core.Holder<net.minecraft.world.item.alchemy.Potion> givePotion = ItemCatalog.potionForName(give);
+				net.minecraft.core.Holder<net.minecraft.world.item.alchemy.Potion> takePotion = ItemCatalog.potionForName(take);
+				gives = List.of(new ItemCatalog.MatchedItem(giveItem, give, giveCount, givePotion));
+				takes = List.of(new ItemCatalog.MatchedItem(takeItem, take, takeCount, takePotion));
 			}
 			if (gives.isEmpty() || takes.isEmpty()) return null;
 			return new Barter(gives, takes);
@@ -1491,7 +1652,9 @@ public final class MobAiService {
 		if (obj.has("count")) {
 			try { count = obj.get("count").getAsInt(); } catch (Exception ignored) {}
 		}
-		return new ItemCatalog.MatchedItem(item, name, Math.max(1, count));
+		// 药水类物品需要精确匹配药水效果（喷溅型虚弱药水 vs 喷溅型治疗药水）
+		net.minecraft.core.Holder<net.minecraft.world.item.alchemy.Potion> potion = ItemCatalog.potionForName(name);
+		return new ItemCatalog.MatchedItem(item, name, Math.max(1, count), potion);
 	}
 
 	/** 数量容错解析：支持数字与中文数字（五/十二/二十） */
@@ -1625,11 +1788,26 @@ public final class MobAiService {
 	/**
 	 * 从生物台词中提取它答应给玩家的物品（信守承诺：说了给就必须给）。
 	 * 匹配"给你XX"、"拿着XX"、"送你XX"、"here you go, XX"、"take this XX"等（免费赠送）。
-	 * 以及"好的，XX"、"行，XX"等接受交易后附带的物品承诺（需要玩家先给东西）。
+	 * 注意：交易语境下（玩家说"X换Y"等）不提取任何物品，回赠完全由barter系统统一处理。
 	 */
-	private static PromisedItems extractPromisedItems(String say, boolean english) {
+	private static PromisedItems extractPromisedItems(String say, String userText, boolean english) {
 		if (say == null || say.isEmpty()) return new PromisedItems(List.of(), false);
 		if (REFUSE_PATTERN.matcher(say).find()) return new PromisedItems(List.of(), false);
+
+		// 交易语境检测：检查玩家消息或生物回复中是否有交易关键词
+		// 交易场景下回赠由BarterDeal统一处理，"给你绿宝石"是交易回赠不是免费赠送
+		String checkUserText = userText != null ? userText : "";
+		boolean isTradeContext = (english
+				? (say.toLowerCase().contains(" for ") || say.toLowerCase().contains("trade")
+				   || say.toLowerCase().contains("exchange") || say.toLowerCase().contains(" swap ")
+				   || checkUserText.toLowerCase().contains(" for ") || checkUserText.toLowerCase().contains("trade")
+				   || checkUserText.toLowerCase().contains("exchange") || checkUserText.toLowerCase().contains(" swap ")
+				   || checkUserText.toLowerCase().contains(" in return"))
+				: (say.contains("换") || say.contains("交换")
+				   || checkUserText.contains("换") || checkUserText.contains("交换") || checkUserText.contains("换给")));
+		if (isTradeContext) {
+			return new PromisedItems(List.of(), false);
+		}
 
 		List<ItemCatalog.MatchedItem> result = new ArrayList<>();
 		boolean isFreeGift = false;
@@ -1662,11 +1840,12 @@ public final class MobAiService {
 			}
 		}
 
-		// 如果没找到带前缀的，直接在整个台词里找（兜底：AI可能说"好，附魔金苹果"→有条件承诺）
+		// 如果没找到带前缀的，尝试兜底提取（AI可能说"好，附魔金苹果"→有条件承诺）
+		// 但这只适用于非交易场景的友好回应
 		if (result.isEmpty() && ACCEPT_PATTERN.matcher(say).find()) {
 			List<ItemCatalog.MatchedItem> all = ItemCatalog.findAllInText(say, english);
 			result.addAll(all);
-			isFreeGift = false; // 接受交易场景下的承诺需要玩家给东西
+			isFreeGift = false;
 		}
 
 		return new PromisedItems(result, isFreeGift && !result.isEmpty());

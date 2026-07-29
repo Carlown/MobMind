@@ -56,29 +56,19 @@ public class WeaponAttackGoal extends MeleeAttackGoal {
 			return super.canUse();
 		}
 
-		// 如果原版 AI 已经锁定了一个有效目标（例如敌对怪物自然锁定玩家），直接使用
+		// 如果原版 AI 已经锁定了玩家（敌对怪物自然锁定玩家），直接使用
 		LivingEntity existingTarget = mob.getTarget();
-		if (existingTarget != null && existingTarget.isAlive() && canMeleeTarget(existingTarget)) {
+		if (existingTarget instanceof Player && existingTarget.isAlive() && canMeleeTarget(existingTarget)) {
 			return super.canUse();
 		}
 
-		// 中立生物（末影人、僵尸猪灵等）：不主动搜索攻击目标，除非被激怒或保护玩家
-		PersonalityGenerator.Category cat = MobMindState.categoryOf(mob);
-		if (cat != PersonalityGenerator.Category.HOSTILE) {
-			LivingEntity protectorTarget = findProtectorTarget();
-			if (protectorTarget != null) {
-				mob.setTarget(protectorTarget);
-				return super.canUse();
-			}
-			return false;
+		// 所有生物（不论敌对/中立）：不主动搜索攻击目标，只在保护玩家/友方时才攻击
+		LivingEntity protectorTarget = findProtectorTarget();
+		if (protectorTarget != null) {
+			mob.setTarget(protectorTarget);
+			return super.canUse();
 		}
-
-		// 敌对型生物：主动搜索附近敌人
-		LivingEntity target = findNearbyEnemy();
-		if (target == null) return false;
-		if (!isValidTarget(target)) return false;
-		mob.setTarget(target);
-		return super.canUse();
+		return false;
 	}
 
 	@Override
@@ -99,21 +89,13 @@ public class WeaponAttackGoal extends MeleeAttackGoal {
 			if (isValidProtectorTarget(target)) {
 				return super.canContinueToUse();
 			}
-			// 敌对生物通过原版AI自然锁定的玩家目标，允许继续攻击
-			if (canMeleeTarget(target)) {
-				PersonalityGenerator.Category cat = MobMindState.categoryOf(mob);
-				if (cat == PersonalityGenerator.Category.HOSTILE) return super.canContinueToUse();
+			// 原版AI锁定的玩家目标，允许继续攻击
+			if (target instanceof Player && canMeleeTarget(target)) {
+				return super.canContinueToUse();
 			}
-			if (!isValidTarget(target)) {
-				// 如果目标是玩家（非激怒状态），让出执行权给原版 AI，不强行清除目标
-				if (target instanceof Player) return false;
-				// 其他无效目标（死亡、友军等）才清除
-				mob.setTarget(null);
-				return false;
-			}
-			// 中立生物不继续主动攻击
-			PersonalityGenerator.Category cat = MobMindState.categoryOf(mob);
-			if (cat != PersonalityGenerator.Category.HOSTILE) return false;
+			// 其他目标（附近乱搜的怪物等）：清除，不继续攻击
+			mob.setTarget(null);
+			return false;
 		}
 		return super.canContinueToUse();
 	}
@@ -289,16 +271,17 @@ public class WeaponAttackGoal extends MeleeAttackGoal {
 		return isWeapon(mob.getMainHandItem());
 	}
 
-	/** 判断是否是近战武器（不包括弓/弩，避免覆盖骷髅的远程射击 AI） */
+	/** 判断是否是近战武器（不包括弓/弩/三叉戟，避免覆盖远程射击 AI） */
 	public static boolean isMeleeWeapon(ItemStack stack) {
 		if (stack == null || stack.isEmpty()) return false;
+		// 三叉戟不算近战武器——它应该远程投掷（像溺尸一样）
+		if (stack.getItem() instanceof TridentItem) return false;
 		// 近战武器：剑、斧等（有 WEAPON 组件）
 		if (stack.get(net.minecraft.core.component.DataComponents.WEAPON) != null) return true;
-		// 穿刺武器：三叉戟等
+		// 穿刺武器（三叉戟已被上面排除，这里只会匹配其他穿刺类）
 		if (stack.get(net.minecraft.core.component.DataComponents.PIERCING_WEAPON) != null) return true;
 		// 动能武器：重锤等
 		if (stack.get(net.minecraft.core.component.DataComponents.KINETIC_WEAPON) != null) return true;
-		// 注意：弓/弩不算近战武器，骷髅的原版射击 AI 不会被覆盖
 		return false;
 	}
 

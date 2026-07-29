@@ -1,9 +1,11 @@
 package com.mobmind.item;
 
+import com.mobmind.ai.MobAiService;
 import com.mobmind.state.MobMindState;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvents;
@@ -53,11 +55,17 @@ public class FriendSelectorItem extends Item {
 		UUID mid = mob.getUUID();
 		Set<UUID> selected = SELECTED_FRIENDS.computeIfAbsent(pid, k -> ConcurrentHashMap.newKeySet());
 
+		// 根据玩家语言选择生物显示名称
+		boolean english = MobMindState.isPlayerEnglish(pid);
+		MutableComponent mobName = english
+				? Component.literal(MobAiService.getEnglishMobName(mob))
+				: mob.getName().copy();
+
 		if (selected.contains(mid)) {
 			selected.remove(mid);
 			GLOW_EFFECT.remove(mid);
 			sp.sendSystemMessage(Component.translatable("item.mobmind.friend_selector.deselected",
-					mob.getName()).withStyle(ChatFormatting.YELLOW));
+					mobName).withStyle(ChatFormatting.YELLOW));
 			level.playSound(null, sp.getX(), sp.getY(), sp.getZ(),
 					SoundEvents.EXPERIENCE_ORB_PICKUP, SoundSource.PLAYERS, 0.8f, 0.7f);
 		} else {
@@ -70,7 +78,7 @@ public class FriendSelectorItem extends Item {
 			long endTime = level.getLevelData().getGameTime() + 400;
 			GLOW_EFFECT.put(mid, endTime);
 			sp.sendSystemMessage(Component.translatable("item.mobmind.friend_selector.selected",
-					mob.getName(), selected.size()).withStyle(ChatFormatting.GREEN));
+					mobName, selected.size()).withStyle(ChatFormatting.GREEN));
 			level.playSound(null, sp.getX(), sp.getY(), sp.getZ(),
 					SoundEvents.PLAYER_LEVELUP, SoundSource.PLAYERS, 0.6f, 1.5f);
 			spawnSelectParticles(level, mob);

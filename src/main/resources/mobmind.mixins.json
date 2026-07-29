@@ -12,7 +12,9 @@
     "EndermanMixin",
     "EnderDragonFightMixin",
     "MeleeAttackGoalMixin",
-    "RangedBowAttackGoalMixin"
+    "RangedBowAttackGoalMixin",
+    "RangedCrossbowAttackGoalMixin",
+    "VillagerMixin"
   ],
   "injectors": {
     "defaultRequire": 1

@@ -38,8 +38,9 @@ public final class BehaviorActions {
 		switch (action) {
 			case "calm" -> {
 				mob.setTarget(null);
+				mob.setLastHurtByMob(null); // 清除仇恨记忆，防止原版AI重新锁定
 				if (mob instanceof NeutralMob neutral) neutral.stopBeingAngry();
-				MobMindState.calm(mob, player.getUUID(), now + 12000); // 10分钟
+				MobMindState.calm(mob, player.getUUID(), now + 12000); // 10分钟（同时清除激怒状态）
 				MobMindState.clearOrder(mob);
 			}
 			case "follow" -> MobMindState.setOrder(mob, MobMindState.OrderType.FOLLOW, player.getUUID(), now + 6000);
@@ -56,6 +57,7 @@ public final class BehaviorActions {
 				if (mob instanceof Monster || mob instanceof NeutralMob) {
 					MobMindState.clearCalm(mob, player.getUUID()); // 翻脸：安抚作废
 					MobMindState.provoke(mob, player.getUUID(), now + 6000); // 5分钟激怒，压过好感
+					mob.setLastHurtByMob(player);
 					mob.setTarget(player);
 				} else {
 					return "none"; // 被动生物不会攻击，忽略

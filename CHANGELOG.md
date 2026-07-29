@@ -28,6 +28,10 @@
 - Non-sneak right-click no longer consumes weapons/armor/shields/arrows.
 - Bow/crossbow mobs properly shoot from distance and fall back to melee when out of ammo.
 - Fixed `NullPointerException: Item id not set` crash on MC 26.2 for custom items/recipes.
+- Path-block reminder now targets the blocking player correctly instead of falling back to the first remembered player.
+- Memory file migration: old `.mobmind_memory` JSON files are automatically imported into the new NBT-based persistent storage on first world load.
+- Reduced duplicate chat messages when mobs are hit while already retaliating.
+- VillagerMixin no longer crashes when negotiating prices with wandering traders.
 
 ## 1.1.2
 

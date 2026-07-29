@@ -177,26 +177,25 @@ public abstract class MobMixin extends LivingEntity {
 			}
 		}
 
-		// 2. 持武器/盾牌生物：友好/安抚状态下不攻击玩家
-		if (target instanceof Player player
-				&& (WeaponAttackGoal.isHoldingMeleeWeapon(self)
-					|| WeaponRangedAttackGoal.isHoldingRangedWeapon(self)
-					|| ShieldBlockGoal.isHoldingShield(self))) {
+		// 2. 所有生物：友好/安抚状态下不攻击玩家（包括自然生成的骷髅等）
+		if (target instanceof Player player) {
 			long gameTime = this.level().getLevelData().getGameTime();
 			if (!MobMindState.isProvokedTowards(self, player.getUUID(), gameTime)
 					&& (MobMindState.isFriendlyTo(self, player.getUUID())
 							|| MobMindState.isCalmedTowards(self, player.getUUID(), gameTime))) {
 				self.setTarget(null);
+				self.setLastHurtByMob(null);
 			}
 		}
 	}
 
 	/** 限制物品拾取：只有PersonaRegistry支持的生物才能捡玩家丢的物品，且必须贴着蹭在一起才捡；
-	 *  刚给玩家的奖励物品（以物易物/承诺回赠）任何生物都不能捡回去，防止女巫把自己扔给玩家的药水捡回来 */
+	 *  刚给玩家的奖励物品（以物易物/承诺回赠）任何生物都不能捡回去，防止女巫把自己扔给玩家的药水捡回来；
+	 *  捡起错误物品（欺骗）时触发生物发怒 */
 	@Inject(method = "pickUpItem(Lnet/minecraft/server/level/ServerLevel;Lnet/minecraft/world/entity/item/ItemEntity;)V",
 			at = @At("HEAD"), cancellable = true)
 	private void mobmind$restrictPickup(net.minecraft.server.level.ServerLevel level,
-										ItemEntity itemEntity, CallbackInfo ci) {
+									  ItemEntity itemEntity, CallbackInfo ci) {
 		if (this.level().isClientSide()) return;
 		Mob self = (Mob) (Object) this;
 
@@ -210,7 +209,7 @@ public abstract class MobMixin extends LivingEntity {
 		Entity thrower = itemEntity.getOwner();
 
 		// 只有玩家丢出的物品才受限制
-		if (thrower instanceof Player player) {
+		if (thrower instanceof ServerPlayer player) {
 			// 不支持AI的生物（牛猪鸡等）完全不能捡玩家丢的东西
 			if (!PersonaRegistry.supports(self)) {
 				ci.cancel();
@@ -221,7 +220,10 @@ public abstract class MobMixin extends LivingEntity {
 			double distToPlayer = self.distanceTo(player);
 			if (distToItem > 0.8 || distToPlayer > 1.2) {
 				ci.cancel();
+				return;
 			}
+			// 欺骗检测：在物品被捡起前检查是否符合约定（物品类型/药水效果错误则发怒）
+			BarterActions.checkCheatOnPickup(self, itemEntity);
 		}
 	}
 
