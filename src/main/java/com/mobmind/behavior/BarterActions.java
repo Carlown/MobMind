@@ -45,14 +45,15 @@ public class BarterActions {
 
 	private BarterActions() {}
 
-	/** 把砍价结果写回村民商品：同村民只能砍一次；砍太狠会被拒绝 */
-	public static void applyBargain(AbstractVillager villager, ServerPlayer player,
+	/** 把砍价结果写回村民/流浪商人商品：同商品只能砍一次；砍太狠会被拒绝 */
+	public static void applyBargain(net.minecraft.world.item.trading.Merchant merchant, ServerPlayer player,
 								   Personality persona, String itemName, boolean agree) {
-		if (villager.getOffers().isEmpty()) return;
+		if (merchant.getOffers().isEmpty()) return;
 		if (!agree) return;
 		String itemLower = itemName.toLowerCase();
+		net.minecraft.world.entity.Entity entity = (net.minecraft.world.entity.Entity) merchant;
 
-		MerchantOffers offers = villager.getOffers();
+		MerchantOffers offers = merchant.getOffers();
 		for (int i = 0; i < offers.size(); i++) {
 			MerchantOffer offer = offers.get(i);
 			String rName = offer.getResult().getHoverName().getString().toLowerCase();
@@ -61,20 +62,20 @@ public class BarterActions {
 			int origCostA = offer.getBaseCostA().getCount();
 			int curCostA = offer.getCostA().getCount();
 			if (curCostA < origCostA) {
-				villager.level().playSound(null, villager.blockPosition(),
-						SoundEvents.VILLAGER_NO, villager.getSoundSource(), 1.0F, 1.0F);
+				entity.level().playSound(null, entity.blockPosition(),
+						SoundEvents.VILLAGER_NO, entity.getSoundSource(), 1.0F, 1.0F);
 				return;
 			}
 
 			boolean cruelOrEvil = persona.temper > 70 || "邪恶".equals(persona.alignment)
 					|| "暴躁".equals(persona.alignment) || "狡诈".equals(persona.alignment);
 			double successRate = cruelOrEvil ? 0.35 : 0.7;
-			int friendship = MobMindState.friendship(villager, player.getUUID());
+			int friendship = MobMindState.friendship((net.minecraft.world.entity.Mob) entity, player.getUUID());
 			if (friendship > 50) successRate += 0.2;
 			if (friendship < 0) successRate -= 0.2;
 			if (player.getRandom().nextDouble() > Math.max(0.1, successRate)) {
-				villager.level().playSound(null, villager.blockPosition(),
-						SoundEvents.VILLAGER_NO, villager.getSoundSource(), 1.0F, 1.0F);
+				entity.level().playSound(null, entity.blockPosition(),
+						SoundEvents.VILLAGER_NO, entity.getSoundSource(), 1.0F, 1.0F);
 				return;
 			}
 
@@ -84,11 +85,11 @@ public class BarterActions {
 			offer.addToSpecialPriceDiff(newCostA - curCostA);
 			offer.setSpecialPriceDiff(newCostA - origCostA);
 
-			villager.level().playSound(null, villager.blockPosition(),
-					SoundEvents.VILLAGER_YES, villager.getSoundSource(), 1.0F, 1.0F);
+			entity.level().playSound(null, entity.blockPosition(),
+					SoundEvents.VILLAGER_YES, entity.getSoundSource(), 1.0F, 1.0F);
 
-			MobMindMod.LOGGER.info("[MobMind] 砍价成功: {} 商品 原{}→新{}",
-					villager.getType().getDescription().getString(), origCostA, newCostA);
+			MobMindMod.LOGGER.info("[MobMind] Bargain success: {} item original {}→new {}",
+					entity.getType().getDescription().getString(), origCostA, newCostA);
 			return;
 		}
 	}
@@ -114,7 +115,7 @@ public class BarterActions {
 					// 只需检查玩家是否已交付约定物品（生物已接收并在手持/背包中）
 					// 回赠物品（takes）由 rewardStack 凭空生成，不需要生物身上预先持有
 					boolean playerDelivered = hasEnoughInMob(mob, deal.gives());
-					MobMindMod.LOGGER.info("[MobMind] onMobPickedUp(约定) playerDelivered={} gives={} takes={}",
+					MobMindMod.LOGGER.info("[MobMind] onMobPickedUp(deal) playerDelivered={} gives={} takes={}",
 							playerDelivered, describe(deal.gives()), describe(deal.takes()));
 					if (playerDelivered) {
 						// 扣除玩家给的物品（生物收下了），回赠物品凭空生成给玩家
@@ -130,7 +131,7 @@ public class BarterActions {
 						}
 						String giveDesc = describe(deal.gives());
 						String takeDesc = describe(deal.takes());
-						MobMindMod.LOGGER.info("[MobMind] 以物易物交付(捡起触发): {} ↔ {}", giveDesc, takeDesc);
+						MobMindMod.LOGGER.info("[MobMind] Barter delivery (pickup triggered): {} ↔ {}", giveDesc, takeDesc);
 						MobAiService.notifyBarterCompleted(player, mob, giveDesc, takeDesc);
 					}
 				} else {
@@ -138,7 +139,7 @@ public class BarterActions {
 				}
 			}
 		} catch (Exception ex) {
-			MobMindMod.LOGGER.warn("[MobMind] onMobPickedUp 异常", ex);
+			MobMindMod.LOGGER.warn("[MobMind] onMobPickedUp exception", ex);
 		}
 	}
 
@@ -164,11 +165,11 @@ public class BarterActions {
 
 			CheatCheck cheat = detectCheat(picked, deal.gives());
 			if (cheat.isCheat) {
-				MobMindMod.LOGGER.info("[MobMind] 玩家欺骗！约定: {} 实际扔: {}", describe(deal.gives()), cheat.actualDesc());
+				MobMindMod.LOGGER.info("[MobMind] Player cheated! Agreed: {} actually threw: {}", describe(deal.gives()), cheat.actualDesc());
 				MobAiService.onPlayerCheatedBarter(mob, player, describe(deal.gives()), cheat.actualDesc());
 			}
 		} catch (Exception ex) {
-			MobMindMod.LOGGER.warn("[MobMind] checkCheatOnPickup 异常", ex);
+			MobMindMod.LOGGER.warn("[MobMind] checkCheatOnPickup exception", ex);
 		}
 	}
 
@@ -218,13 +219,13 @@ public class BarterActions {
 
 			mob.setPersistenceRequired();
 			ie.discard();
-			MobMindMod.LOGGER.info("[MobMind] 交易物品自动接收: {} 接收了 {}×{}",
-					mob.getType().getDescription().getString(), stack.getHoverName().getString(), stack.getCount());
+			MobMindMod.LOGGER.info("[MobMind] Barter item auto-accepted: {} received {}×{}",
+				mob.getType().getDescription().getString(), stack.getHoverName().getString(), stack.getCount());
 
 			tryCompleteBarter(mob, player, gameTime);
 			return true;
 		} catch (Exception ex) {
-			MobMindMod.LOGGER.warn("[MobMind] tryAcceptBarterItem 异常", ex);
+			MobMindMod.LOGGER.warn("[MobMind] tryAcceptBarterItem exception", ex);
 			return false;
 		}
 	}
@@ -260,7 +261,7 @@ public class BarterActions {
 		}
 		String giveDesc = describe(deal.gives());
 		String takeDesc = describe(deal.takes());
-		MobMindMod.LOGGER.info("[MobMind] 以物易物交付: {} ↔ {}", giveDesc, takeDesc);
+		MobMindMod.LOGGER.info("[MobMind] Barter delivery: {} ↔ {}", giveDesc, takeDesc);
 		MobAiService.notifyBarterCompleted(player, mob, giveDesc, takeDesc);
 		return true;
 	}
@@ -285,10 +286,10 @@ public class BarterActions {
 								  List<ItemCatalog.MatchedItem> gives, List<ItemCatalog.MatchedItem> takes) {
 		List<MobMindState.BarterDeal.ItemRequirement> giveReqs = toRequirements(gives);
 		List<MobMindState.BarterDeal.ItemRequirement> takeReqs = toRequirements(takes);
-		MobMindMod.LOGGER.info("[MobMind] createDeal 原始: gives={} takes={} -> 转换后 gives={} takes={}",
+		MobMindMod.LOGGER.info("[MobMind] createDeal raw: gives={} takes={} -> converted gives={} takes={}",
 				describeMatched(gives), describeMatched(takes), describe(giveReqs), describe(takeReqs));
 		if (giveReqs.isEmpty() || takeReqs.isEmpty()) {
-			MobMindMod.LOGGER.warn("[MobMind] createDeal 空约定，跳过");
+			MobMindMod.LOGGER.warn("[MobMind] createDeal empty deal, skipping");
 			return;
 		}
 		long now = ((ServerLevel) mob.level()).getLevelData().getGameTime();
@@ -337,11 +338,11 @@ public class BarterActions {
 				net.minecraft.core.Holder<net.minecraft.world.item.alchemy.Potion> potion = req.potion();
 				if (potion == null) {
 					potion = Potions.WATER;
-					MobMindMod.LOGGER.warn("[MobMind] rewardStack: 未知药水类型，将给水瓶");
+					MobMindMod.LOGGER.warn("[MobMind] rewardStack: unknown potion type, will give water bottle");
 				}
 				stack.set(DataComponents.POTION_CONTENTS, new PotionContents(potion));
 			} catch (Exception e) {
-				MobMindMod.LOGGER.warn("[MobMind] 药水 NBT 设置失败: {}", e.getMessage());
+				MobMindMod.LOGGER.warn("[MobMind] Failed to set potion NBT: {}", e.getMessage());
 			}
 		}
 		return stack;
@@ -384,10 +385,10 @@ public class BarterActions {
 
 					String giveDesc = describe(deal.gives());
 					String takeDesc = describe(deal.takes());
-					MobMindMod.LOGGER.info("[MobMind] 以物易物交付(tick): {} ↔ {}", giveDesc, takeDesc);
+					MobMindMod.LOGGER.info("[MobMind] Barter delivery (tick): {} ↔ {}", giveDesc, takeDesc);
 					MobAiService.notifyBarterCompleted(player, mob, giveDesc, takeDesc);
 				} catch (Exception ex) {
-					MobMindMod.LOGGER.warn("[MobMind] tickDeals 异常", ex);
+					MobMindMod.LOGGER.warn("[MobMind] tickDeals exception", ex);
 				}
 			}
 		}
@@ -414,16 +415,16 @@ public class BarterActions {
 					for (MobMindState.BarterDeal.ItemRequirement promised : promise.promisedItems()) {
 						ItemStack reward = rewardStack(promised);
 						dropRewardToPlayer(level, player, mob, reward);
-						MobMindMod.LOGGER.info("[MobMind] 免费赠送(tick): {} 给 {} {}",
-								mob.getType().getDescription().getString(),
-								player.getGameProfile().name(),
-								reward.getHoverName().getString());
+						MobMindMod.LOGGER.info("[MobMind] Free gift (tick): {} gave {} {}",
+							mob.getType().getDescription().getString(),
+							player.getGameProfile().name(),
+							reward.getHoverName().getString());
 					}
 					MobAiService.notifyBarterCompleted(player, mob, "免费", describe(promise.promisedItems()));
 					continue;
 				}
 			} catch (Exception ex) {
-				MobMindMod.LOGGER.warn("[MobMind] tickPromises 异常", ex);
+				MobMindMod.LOGGER.warn("[MobMind] tickPromises exception", ex);
 			}
 		}
 	}
@@ -541,12 +542,12 @@ public class BarterActions {
 		}
 
 		if (!typeMatched) {
-			MobMindMod.LOGGER.info("[MobMind] 欺骗检测：物品类型不匹配，给的是{}", actualName);
+			MobMindMod.LOGGER.info("[MobMind] Cheat detection: item type mismatch, gave {}", actualName);
 			return new CheatCheck(true, actualName);
 		}
 
 		if (potionMismatch) {
-			MobMindMod.LOGGER.info("[MobMind] 欺骗检测：药水效果不匹配，给的是{}", actualName);
+			MobMindMod.LOGGER.info("[MobMind] Cheat detection: potion effect mismatch, gave {}", actualName);
 			return new CheatCheck(true, actualName);
 		}
 

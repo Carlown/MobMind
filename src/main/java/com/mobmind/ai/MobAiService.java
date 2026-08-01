@@ -6,6 +6,7 @@ import com.google.gson.JsonParser;
 import com.mobmind.MobMindMod;
 import com.mobmind.behavior.BarterActions;
 import com.mobmind.behavior.BehaviorActions;
+import com.mobmind.behavior.HouseGuard;
 import com.mobmind.behavior.ShieldBlockGoal;
 import com.mobmind.behavior.WeaponAttackGoal;
 import com.mobmind.behavior.WeaponRangedAttackGoal;
@@ -22,8 +23,11 @@ import net.fabricmc.fabric.api.networking.v1.PlayerLookup;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.NeutralMob;
@@ -32,6 +36,8 @@ import net.minecraft.world.entity.npc.villager.AbstractVillager;
 import net.minecraft.world.entity.npc.villager.Villager;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 
 import java.util.ArrayList;
@@ -47,7 +53,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class MobAiService {
 	/** 对话历史保留多少条（user+assistant 各算一条，即10轮对话） */
-	private static final int MEMORY_LIMIT = 20;
+	private static final int MEMORY_LIMIT = 40;
 	private static final Map<UUID, Long> LAST_REQUEST = new ConcurrentHashMap<>();
 	private static final Map<UUID, Long> LAST_HURT_REACT = new ConcurrentHashMap<>();
 	private static final Map<UUID, Long> LAST_HELP_CRY = new ConcurrentHashMap<>();
@@ -55,11 +61,61 @@ public final class MobAiService {
 	private static final Map<UUID, Long> LAST_GREET = new ConcurrentHashMap<>();
 	private static final Map<UUID, Long> LAST_TAUNT = new ConcurrentHashMap<>();
 	private static final Map<UUID, Long> LAST_GOSSIP = new ConcurrentHashMap<>();
+	/** 玩家跟傻子村民说话时，附近村民插话劝阻的冷却（key 为傻子村民 UUID） */
+	private static final Map<UUID, Long> LAST_NITWIT_GOSSIP = new ConcurrentHashMap<>();
+	/** 村民小声议论玩家的冷却（key 为玩家 UUID） */
+	private static final Map<UUID, Long> LAST_VILLAGER_WHISPER = new ConcurrentHashMap<>();
+	/** 玩家种地后农民来感谢的冷却（key 为玩家 UUID） */
+	private static final Map<UUID, Long> LAST_PLANT_THANKS = new ConcurrentHashMap<>();
+	/** 生物被手持物品吸引时的反应冷却（key 为生物 UUID） */
+	private static final Map<UUID, Long> LAST_TEMPT_REACT = new ConcurrentHashMap<>();
+	/** 玩家吸引/拴走被动动物时村民质问的冷却（key 为玩家 UUID） */
+	private static final Map<UUID, Long> LAST_LIVESTOCK_LEAD_REACT = new ConcurrentHashMap<>();
+	/** 被动动物/宠物吸引物品映射（实体ID → 吸引物品集合） */
+	private static final java.util.Map<String, java.util.Set<net.minecraft.world.item.Item>> LIVESTOCK_TEMPT_ITEMS;
+	static {
+		var map = new java.util.HashMap<String, java.util.Set<net.minecraft.world.item.Item>>();
+		// 牲畜
+		map.put("cow", java.util.Set.of(net.minecraft.world.item.Items.WHEAT));
+		map.put("sheep", java.util.Set.of(net.minecraft.world.item.Items.WHEAT));
+		map.put("pig", java.util.Set.of(net.minecraft.world.item.Items.CARROT, net.minecraft.world.item.Items.POTATO, net.minecraft.world.item.Items.BEETROOT));
+		map.put("chicken", java.util.Set.of(net.minecraft.world.item.Items.WHEAT_SEEDS, net.minecraft.world.item.Items.MELON_SEEDS,
+				net.minecraft.world.item.Items.PUMPKIN_SEEDS, net.minecraft.world.item.Items.BEETROOT_SEEDS, net.minecraft.world.item.Items.TORCHFLOWER_SEEDS));
+		map.put("rabbit", java.util.Set.of(net.minecraft.world.item.Items.CARROT, net.minecraft.world.item.Items.GOLDEN_CARROT,
+				net.minecraft.world.item.Items.DANDELION));
+		map.put("mooshroom", java.util.Set.of(net.minecraft.world.item.Items.WHEAT));
+		// 马类
+		map.put("horse", java.util.Set.of(net.minecraft.world.item.Items.GOLDEN_APPLE, net.minecraft.world.item.Items.GOLDEN_CARROT,
+				net.minecraft.world.item.Items.SUGAR, net.minecraft.world.item.Items.WHEAT, net.minecraft.world.item.Items.APPLE));
+		map.put("donkey", java.util.Set.of(net.minecraft.world.item.Items.GOLDEN_APPLE, net.minecraft.world.item.Items.GOLDEN_CARROT,
+				net.minecraft.world.item.Items.SUGAR, net.minecraft.world.item.Items.WHEAT, net.minecraft.world.item.Items.APPLE));
+		map.put("mule", java.util.Set.of(net.minecraft.world.item.Items.GOLDEN_APPLE, net.minecraft.world.item.Items.GOLDEN_CARROT,
+				net.minecraft.world.item.Items.SUGAR, net.minecraft.world.item.Items.WHEAT, net.minecraft.world.item.Items.APPLE));
+		map.put("camel", java.util.Set.of(net.minecraft.world.item.Items.CACTUS));
+		// 宠物（猫、狼、鹦鹉）
+		map.put("cat", java.util.Set.of(net.minecraft.world.item.Items.COD, net.minecraft.world.item.Items.SALMON));
+		map.put("wolf", java.util.Set.of(net.minecraft.world.item.Items.BONE, net.minecraft.world.item.Items.BEEF,
+				net.minecraft.world.item.Items.CHICKEN, net.minecraft.world.item.Items.MUTTON,
+				net.minecraft.world.item.Items.PORKCHOP, net.minecraft.world.item.Items.RABBIT,
+				net.minecraft.world.item.Items.ROTTEN_FLESH));
+		map.put("parrot", java.util.Set.of(net.minecraft.world.item.Items.WHEAT_SEEDS, net.minecraft.world.item.Items.MELON_SEEDS,
+				net.minecraft.world.item.Items.PUMPKIN_SEEDS, net.minecraft.world.item.Items.BEETROOT_SEEDS,
+				net.minecraft.world.item.Items.TORCHFLOWER_SEEDS));
+		LIVESTOCK_TEMPT_ITEMS = java.util.Collections.unmodifiableMap(map);
+	}
+	/** 模组支持生物的吸引物品映射（实体ID → 吸引物品集合） */
+	private static final java.util.Map<String, java.util.Set<net.minecraft.world.item.Item>> TEMPT_ITEMS = java.util.Map.of(
+			"zombie_horse", java.util.Set.of(net.minecraft.world.item.Items.RED_MUSHROOM),
+			"strider", java.util.Set.of(net.minecraft.world.item.Items.WARPED_FUNGUS,
+					net.minecraft.world.item.Items.WARPED_FUNGUS_ON_A_STICK)
+	);
 
 	private MobAiService() {}
 
 	/** 已提示过"离线模式"的玩家（每次进服提示一次） */
 	private static final java.util.Set<UUID> OFFLINE_NOTIFIED = java.util.concurrent.ConcurrentHashMap.newKeySet();
+	private static final Map<UUID, Long> LAST_ERROR_NOTIFY = new ConcurrentHashMap<>();
+	private static final long ERROR_NOTIFY_COOLDOWN = 10000; // API错误提示10秒冷却，防止刷屏
 
 	// ---------- 入口：玩家说话 ----------
 
@@ -114,6 +170,47 @@ public final class MobAiService {
 			return title.endsWith("Settings");
 		} catch (Exception e) {
 			return false;
+		}
+	}
+
+	/** 玩家皮肤性别缓存（UUID → true=女/Alex/slim，false=男/Steve/classic） */
+	private static final Map<UUID, Boolean> PLAYER_SKIN_FEMALE = new ConcurrentHashMap<>();
+
+	/**
+	 * 通过玩家 GameProfile 的 textures 属性判断皮肤模型，
+	 * slim（Alex）= 女，classic（Steve）= 男。
+	 * 结果缓存到 PLAYER_SKIN_FEMALE，避免每次都解析 Base64。
+	 */
+	private static boolean isFemaleSkin(ServerPlayer player) {
+		UUID pid = player.getUUID();
+		Boolean cached = PLAYER_SKIN_FEMALE.get(pid);
+		if (cached != null) return cached;
+		boolean female = false;
+		try {
+			var props = player.getGameProfile().properties().get("textures");
+			if (props != null && !props.isEmpty()) {
+				String encoded = props.iterator().next().value();
+				String json = new String(java.util.Base64.getDecoder().decode(encoded),
+						java.nio.charset.StandardCharsets.UTF_8);
+				// 只解析 "model":"slim" 关键字，避免引入完整 JSON 库
+				female = json.contains("\"model\":\"slim\"");
+			}
+		} catch (Exception ignored) {}
+		PLAYER_SKIN_FEMALE.put(pid, female);
+		return female;
+	}
+
+	/** 根据玩家皮肤性别返回称呼提示词片段（注入到 AI 提示词中） */
+	private static String playerSkinGenderHint(ServerPlayer player, boolean en) {
+		boolean female = isFemaleSkin(player);
+		if (en) {
+			return female
+					? "The player appears to be female (slim/Alex skin model). You may address her as lady, miss, or pretty lady depending on your personality."
+					: "The player appears to be male (classic/Steve skin model). You may address him as sir, mister, or handsome depending on your personality.";
+		} else {
+			return female
+					? "这个玩家看起来是女性（slim/Alex皮肤模型）。你可以根据你的性格称呼她为小姐、美女、姑娘等。"
+					: "这个玩家看起来是男性（classic/Steve皮肤模型）。你可以根据你的性格称呼他为先生、帅哥、小伙子等。";
 		}
 	}
 
@@ -252,6 +349,11 @@ public final class MobAiService {
 			text += t("（请用英文回复）", "(Please reply in English)", playerId);
 		}
 		respond(player, mob, text, true);
+
+		// 玩家跟傻子村民说话：附近其他村民会插话劝阻（30秒冷却，避免刷屏）
+		if (isNitwit(mob)) {
+			notifyNitwitGossip(player, mob);
+		}
 	}
 
 	/** "给大家看"：附近最多 3 只其他生物也凑过来看热闹，各自按性格点评一句 */
@@ -265,6 +367,27 @@ public final class MobAiService {
 			respond(player, crowd.get(i), isEnglishUi(playerId)
 					? "(Player " + player.getGameProfile().name() + " is showing everyone what they built. You look over and see: " + seen + ". Comment in character)"
 					: "（玩家" + player.getGameProfile().name() + "向大家展示他建的东西。你凑过去看到：" + seen + "。按你的性格点评一句）", false);
+		}
+	}
+
+	/** 玩家跟傻子村民说话时，附近其他村民会插话劝阻（30秒冷却，每个傻子最多2个村民插话） */
+	private static void notifyNitwitGossip(ServerPlayer player, Mob nitwit) {
+		java.util.UUID playerId = player.getUUID();
+		long now = System.currentTimeMillis();
+		Long last = LAST_NITWIT_GOSSIP.get(nitwit.getUUID());
+		if (last != null && now - last < 30000) return; // 30秒冷却
+		LAST_NITWIT_GOSSIP.put(nitwit.getUUID(), now);
+
+		AABB box = player.getBoundingBox().inflate(16.0);
+		List<Mob> crowd = player.level().getEntitiesOfClass(Mob.class, box,
+				m -> m.isAlive() && m != nitwit && m instanceof Villager && !isNitwit(m) && withinTalkRange(m, player));
+		if (crowd.isEmpty()) return;
+		Collections.shuffle(crowd);
+		int limit = Math.min(2, crowd.size());
+		for (int i = 0; i < limit; i++) {
+			respond(player, crowd.get(i), isEnglishUi(playerId)
+					? "(Player " + player.getGameProfile().name() + " is talking to the village nitwit. You think it's a waste of time—the nitwit can't do any real work or trade, and barely understands anything. In your own style, advise the player not to bother with him: maybe a bit exasperated, pitying, or dismissive. Keep it to one short line)"
+					: "（玩家" + player.getGameProfile().name() + "正在跟村里的傻子村民搭话。你觉得这是白费功夫——傻子干不了活、做不了交易，脑子也不太清楚。用你自己的风格劝玩家别跟他费口舌：可以有点无奈、嫌弃或同情。只说一句短话）", false);
 		}
 	}
 
@@ -293,6 +416,8 @@ public final class MobAiService {
 		MobMindState.clearCalm(mob, playerId); // 动手即撕毁和解
 		com.mobmind.persona.PersonalityGenerator.Category cat = MobMindState.categoryOf(mob);
 		mob.setLastHurtByMob(player);
+		MobMindState.recordGrudge(mob, playerId, "攻击了我",
+				mob.level().getGameTime() + 12000);
 
 		if (cat == com.mobmind.persona.PersonalityGenerator.Category.PASSIVE) {
 			// 被动生物（村民等）：被打后害怕，逃跑2分钟
@@ -385,7 +510,7 @@ public final class MobAiService {
 					peer.setTarget(null); // 被动生物不设攻击目标
 				}
 			}
-			MobMindMod.LOGGER.info("[MobMind] 流言传播: {} 听说玩家 {} 打了 {}, 好感度-{}",
+			MobMindMod.LOGGER.info("[MobMind] Gossip spread: {} heard player {} hit {}, friendship -{}",
 					peer.getType().getDescription().getString(), player.getGameProfile().name(), victimName, cfg.gossipPenalty);
 			if (peer.getRandom().nextInt(100) < cfg.gossipReactChance) {
 				boolean killed = !victim.isAlive();
@@ -827,10 +952,10 @@ public final class MobAiService {
 						mob.level().playSound(null, mob.getX(), mob.getY(), mob.getZ(),
 								net.minecraft.sounds.SoundEvents.GENERIC_EAT,
 								net.minecraft.sounds.SoundSource.NEUTRAL, 1.0f, 1.0f);
-						MobMindMod.LOGGER.info("[MobMind] 自动吃食物: {} HP={}/{}",
-								mob.getType().getDescription().getString(),
-								String.format("%.0f", mob.getHealth()),
-								String.format("%.0f", mob.getMaxHealth()));
+						MobMindMod.LOGGER.info("[MobMind] Auto eat food: {} HP={}/{}",
+							mob.getType().getDescription().getString(),
+							String.format("%.0f", mob.getHealth()),
+							String.format("%.0f", mob.getMaxHealth()));
 					}
 				}
 			}
@@ -905,20 +1030,229 @@ public final class MobAiService {
 
 	private static final Map<UUID, Long> LAST_PIGLIN_LOOT_ANGER = new ConcurrentHashMap<>();
 
+	/** 猪灵因玩家盗窃（开箱/挖金）被激怒 - 通用入口（由原版钩子调用） */
 	public static void onPiglinAngeredByLooting(net.minecraft.world.entity.monster.piglin.Piglin piglin, ServerPlayer player) {
+		if (!PersonaRegistry.supports(piglin)) return;
+		// 通用入口使用默认提示（不知道具体原因）
+		triggerPiglinAnger(piglin, player, 0, null);
+	}
+
+	/** 猪灵因玩家挖金块/金矿石被激怒 */
+	public static void onPiglinGoldMined(net.minecraft.world.entity.Mob piglin, ServerPlayer player, String blockName) {
+		triggerPiglinAnger(piglin, player, 1, blockName);
+	}
+
+	/** 猪灵因玩家开箱子被激怒 */
+	public static void onPiglinContainerOpened(net.minecraft.world.entity.Mob piglin, ServerPlayer player, String containerName) {
+		triggerPiglinAnger(piglin, player, 2, containerName);
+	}
+
+	/**
+	 * 猪灵愤怒核心逻辑
+	 * @param type 0=通用 1=挖金 2=开容器
+	 */
+	private static void triggerPiglinAnger(net.minecraft.world.entity.Mob piglin, ServerPlayer player, int type, String targetName) {
 		if (!PersonaRegistry.supports(piglin)) return;
 		java.util.UUID playerId = player.getUUID();
 		long now = System.currentTimeMillis();
 		Long last = LAST_PIGLIN_LOOT_ANGER.get(piglin.getUUID());
-		if (last != null && now - last < 10000) return; // 10秒冷却
+		if (last != null && now - last < 8000) return; // 8秒冷却，避免太多猪灵同时刷屏
 		LAST_PIGLIN_LOOT_ANGER.put(piglin.getUUID(), now);
 
-		MobMindState.adjustFriendship(piglin, playerId, -8);
+		MobMindState.adjustFriendship(piglin, playerId, -10);
 		long gameTime = piglin.level().getLevelData().getGameTime();
 		MobMindState.provoke(piglin, playerId, gameTime + 6000); // 激怒5分钟
-		respond(player, piglin, isEnglishUi(playerId)
-				? "(Player " + player.getGameProfile().name() + " is mining your gold blocks or rummaging through your chests! You are furious. Shout, threaten or roar in character)"
-				: "（玩家" + player.getGameProfile().name() + "正在挖你们的金块或者翻你们的宝箱！你被激怒了。用符合你性格的方式呵斥、威胁或怒吼）", false);
+
+		boolean en = isEnglishUi(playerId);
+		boolean isBrute = piglin instanceof net.minecraft.world.entity.monster.piglin.PiglinBrute;
+		String prompt;
+
+		if (type == 1) {
+			// 挖金块
+			String goldDesc = targetName != null ? targetName : (en ? "gold" : "金子");
+			if (isBrute) {
+				prompt = en
+					? "(An INTRUDER is mining " + goldDesc + " in YOUR bastion! You are a Piglin Brute, the fiercest guardian! Roar furiously, charge at " + player.getGameProfile().name() + " immediately, yell threats of violence in your own brutish style)"
+					: "（有入侵者在你的堡垒里挖" + goldDesc + "！你是猪灵蛮兵，最强的守卫！发出愤怒的咆哮，立刻冲向" + player.getGameProfile().name() + "，用你粗暴的风格喊出最凶狠的威胁）";
+			} else {
+				prompt = en
+					? "(A thief is mining " + goldDesc + " that BELONGS TO YOU! That's your gold! Snort angrily, oink aggressively, yell at " + player.getGameProfile().name() + " and charge to attack them with your weapon)"
+					: "（有小偷在挖属于你的" + goldDesc + "！那是你的金子！愤怒地喷鼻息，凶狠地哼哼，向" + player.getGameProfile().name() + "大喊大叫，拿起武器冲上去攻击）";
+			}
+		} else if (type == 2) {
+			// 开箱子
+			String containerDesc = targetName != null ? targetName : (en ? "chest" : "箱子");
+			if (isBrute) {
+				prompt = en
+					? "(An INTRUDER is LOOTING your " + containerDesc + " in the bastion! You are a Piglin Brute! Roar with rage, draw your axe and charge " + player.getGameProfile().name() + " immediately to kill the thief!)"
+					: "（有入侵者在堡垒里偷你的" + containerDesc + "！你是猪灵蛮兵！怒吼一声，拔出斧头立刻冲向" + player.getGameProfile().name() + "，杀死这个小偷！）";
+			} else {
+				prompt = en
+					? "(A sneaky thief is opening YOUR " + containerDesc + "! Rummaging through your treasures! Snort in fury, grunt aggressively, yell at " + player.getGameProfile().name() + " and attack them with your crossbow/sword)"
+					: "（一个鬼鬼祟祟的小偷在开你的" + containerDesc + "！乱翻你的宝贝！愤怒地喷鼻息，凶狠地咕噜着，向" + player.getGameProfile().name() + "大喊，用弩/剑攻击）";
+			}
+		} else {
+			// 通用（原版钩子，不知道具体原因）
+			if (isBrute) {
+				prompt = en
+					? "(Intruder alert! " + player.getGameProfile().name() + " is stealing from the bastion! You are a Piglin Brute, attack and kill them! Roar in rage!)"
+					: "（入侵者警报！" + player.getGameProfile().name() + "在偷堡垒的东西！你是猪灵蛮兵，攻击并杀死他们！怒吼！）";
+			} else {
+				prompt = en
+					? "(Player " + player.getGameProfile().name() + " is stealing gold or looting chests in your home! You are furious! Snort, grunt, and attack the thief!)"
+					: "（玩家" + player.getGameProfile().name() + "在你家偷金子或开箱子！你被激怒了！喷鼻息、哼哼，攻击这个小偷！）";
+			}
+		}
+
+		// 确保猪灵把玩家设为攻击目标
+		if (piglin.getTarget() == null) {
+			piglin.setTarget(player);
+		}
+
+		respond(player, piglin, t(prompt, prompt, playerId), false);
+	}
+
+	// ---------- 入口：林地府邸/女巫小屋/海底废墟守卫 ----------
+
+	private static final Map<UUID, Long> LAST_STRUCTURE_GUARD = new ConcurrentHashMap<>();
+
+	/**
+	 * 通用结构守卫触发：卫道士/唤魔者/女巫/溺尸等因玩家破坏方块或开容器而攻击。
+	 * @param guardType 1=林地府邸(卫道士/唤魔者), 2=女巫小屋(女巫), 3=沉船/海底废墟(溺尸)
+	 * @param eventType 1=破坏方块, 2=开容器
+	 */
+	public static void onStructureGuardTrigger(net.minecraft.world.entity.Mob guard, ServerPlayer player,
+											   int guardType, int eventType, String targetName) {
+		if (!PersonaRegistry.supports(guard)) return;
+		java.util.UUID playerId = player.getUUID();
+		long now = System.currentTimeMillis();
+		Long last = LAST_STRUCTURE_GUARD.get(guard.getUUID());
+		if (last != null && now - last < 6000) return; // 6秒冷却
+		LAST_STRUCTURE_GUARD.put(guard.getUUID(), now);
+
+		MobMindState.adjustFriendship(guard, playerId, -15);
+		long gameTime = guard.level().getLevelData().getGameTime();
+		MobMindState.provoke(guard, playerId, gameTime + 6000); // 激怒5分钟
+		if (guard.getTarget() == null) guard.setTarget(player);
+
+		boolean en = isEnglishUi(playerId);
+		String guardianName;
+		String placeName;
+		String actionDesc;
+		if (guardType == 1) {
+			boolean isEvoker = guard.getClass().getSimpleName().equals("Evoker");
+			guardianName = isEvoker
+					? (en ? "Evoker" : "唤魔者") : (en ? "Vindicator" : "卫道士");
+			placeName = en ? "Woodland Mansion" : "林地府邸";
+		} else if (guardType == 2) {
+			guardianName = en ? "Witch" : "女巫";
+			placeName = en ? "Witch Hut" : "女巫小屋";
+		} else if (guardType == 3) {
+			guardianName = en ? "Drowned" : "溺尸";
+			placeName = en ? "shipwreck/ocean ruin" : "沉船/海底废墟";
+		} else if (guardType == 4) {
+			guardianName = en ? "Zombified Piglin" : "僵尸猪灵";
+			placeName = en ? "Nether ruins" : "下界遗迹";
+		} else {
+			// guardType == 5: generic dungeon/temple monster
+			String simpleName = guard.getClass().getSimpleName();
+			guardianName = en ? simpleName : translateMobName(simpleName);
+			placeName = en ? "dungeon/temple" : "地牢/神殿";
+		}
+		actionDesc = eventType == 1
+				? (en ? "breaking " + targetName : "破坏" + targetName)
+				: (en ? "looting " + targetName : "翻" + targetName);
+
+		String prompt = en
+				? "(An intruder " + player.getGameProfile().name() + " is " + actionDesc + " in YOUR " + placeName + "! "
+				+ "You are a " + guardianName + ", the guardian of this place! Attack the thief! Cast spells / charge with your weapon! Roar in fury!)"
+				: "（入侵者" + player.getGameProfile().name() + "在你的" + placeName + "里" + actionDesc + "！你是" + guardianName + "，这里的守卫！攻击这个小偷！施法 / 挥武器冲上去！怒吼！）";
+
+		respond(player, guard, t(prompt, prompt, playerId), false);
+	}
+
+	// ---------- 入口：玩家在村庄搞破坏，铁傀儡过来询问/警告 ----------
+
+	/**
+	 * 玩家在村庄内搞破坏/翻箱子 → 附近铁傀儡过来询问/警告。
+	 * 铁傀儡是村庄的守护者，多次作案或与玩家关系恶劣时会愤怒咆哮并攻击。
+	 * @param targetName 被破坏/翻的方块名（容器名/方块名）
+	 * @param isContainer 是否是翻容器
+	 * @param isJob 是否是工作方块
+	 * @param isVillageProp 是否是村庄公共设施
+	 * @param offenses 玩家的连续作案计数（共享村民喝止的计数）
+	 * @param friendship 铁傀儡对玩家的好感度
+	 */
+	public static void onVillageGolemInvestigate(net.minecraft.world.entity.Mob golem, ServerPlayer player,
+												 String targetName, boolean isContainer, boolean isJob, boolean isVillageProp,
+												 int offenses, int friendship) {
+		if (!PersonaRegistry.supports(golem)) return;
+		java.util.UUID playerId = player.getUUID();
+		boolean en = isEnglishUi(playerId);
+
+		// 描述玩家正在做的事
+		String action;
+		if (isContainer) {
+			action = en ? "rummaging through a " + targetName + " in the village" : "在村子里翻一个" + targetName;
+		} else if (isJob) {
+			action = en ? "smashing a " + targetName + " (a villager's work station)" : "砸了一个" + targetName + "（村民的工作台）";
+		} else if (isVillageProp) {
+			action = en ? "destroying the village's " + targetName : "破坏了村里的" + targetName;
+		} else {
+			action = en ? "breaking a " + targetName + " in the village" : "在村子里拆了一个" + targetName;
+		}
+
+		String prompt;
+		// 好感度<20（不友好）或连续作案≥5次 → 铁傀儡攻击玩家
+		boolean willAttack = offenses >= 5 || friendship < 20;
+		if (willAttack) {
+			// 多次作案 / 好感度低 → 铁傀儡彻底愤怒，攻击玩家
+			prompt = en
+					? "(Player " + player.getGameProfile().name() + " has been " + action
+					+ " REPEATEDLY! As the Iron Golem, guardian of this village, you've had ENOUGH! "
+					+ "Roar in fury, swing your mighty iron arm, and ATTACK the vandal to drive them out of the village! "
+					+ "Show no mercy—they've been warned enough times!)"
+					: "（玩家" + player.getGameProfile().name() + "一直在" + action
+					+ "！你是铁傀儡，村庄的守护者，你已经忍无可忍！"
+					+ "怒吼一声，挥起巨大的铁拳，攻击这个破坏者，把他赶出村子！"
+					+ "不要再手软——他已经被告诫过很多次了！）";
+			// 激怒铁傀儡 10 分钟，目标设为玩家
+			long gameTime = golem.level().getLevelData().getGameTime();
+			MobMindState.provoke(golem, playerId, gameTime + 12000);
+			MobMindState.adjustFriendship(golem, playerId, -10);
+			// setLastHurtByMob + setTarget 双保险确保原版近战 AI 启动（参考 scoldBedThief 路径）
+			golem.setLastHurtByMob(player);
+			golem.setTarget(player);
+		} else if (offenses >= 2) {
+			// 多次作案但未达攻击阈值 → 警告
+			prompt = en
+					? "(Player " + player.getGameProfile().name() + " is " + action + " AGAIN! "
+					+ "As the Iron Golem guardian of this village, walk over with heavy thudding footsteps, "
+					+ "loom over them menacingly, and warn them with a deep rumble to STOP breaking things in your village. "
+					+ "You won't attack yet, but make it crystal clear you're watching and your patience is running thin.)"
+					: "（玩家" + player.getGameProfile().name() + "又在" + action
+					+ "！你是村庄守护铁傀儡，迈着沉重的脚步走过去，"
+					+ "居高临下地俯视他，用低沉的轰鸣警告他不要再破坏村子。"
+					+ "你暂时不动手，但要让他清楚你在盯着他，你的耐心快用完了。）";
+			MobMindState.adjustFriendship(golem, playerId, -3);
+		} else {
+			// 第一次 → 沉重地走过去询问
+			prompt = en
+					? "(Player " + player.getGameProfile().name() + " is " + action + "! "
+					+ "As the Iron Golem guardian of this village, walk over slowly with heavy footsteps, "
+					+ "look down at them from your great height, and ask in a low rumble what they think they're doing to the village. "
+					+ "You're watching, but not hostile yet—you trust they have a good reason.)"
+					: "（玩家" + player.getGameProfile().name() + "正在" + action + "！"
+					+ "你是村庄守护铁傀儡，迈着沉重的步伐缓缓走过去，"
+					+ "从高大的身躯上低头看着他，用低沉的声音问他到底在搞什么。"
+					+ "你在观察，但还没敌意——你愿意相信他有正当理由。）";
+			MobMindState.adjustFriendship(golem, playerId, -1);
+		}
+
+		respond(player, golem, t(prompt, prompt, playerId), false);
+		MobMindState.recordGrudge(golem, playerId,
+				isContainer ? "翻村里的" + targetName : "破坏村里的" + targetName,
+				golem.level().getGameTime() + 12000);
 	}
 
 	// ---------- 入口：玩家破坏末地水晶，末影龙发怒 ----------
@@ -1017,12 +1351,12 @@ public final class MobAiService {
 			if (last != null && gameTime - last < 2400) continue; // 2分钟冷却
 			LAST_FOOD_REQUEST.put(mob.getUUID(), gameTime);
 			float hpPct = mob.getHealth() / mob.getMaxHealth();
-			MobMindMod.LOGGER.info("[MobMind] 求食物: {} HP={}/{}({}%) 玩家={}",
-					mob.getType().getDescription().getString(),
-					String.format("%.0f", mob.getHealth()),
-					String.format("%.0f", mob.getMaxHealth()),
-					String.format("%.0f%%", hpPct * 100),
-					player.getGameProfile().name());
+			MobMindMod.LOGGER.info("[MobMind] Begging for food: {} HP={}/{}({}%) player={}",
+				mob.getType().getDescription().getString(),
+				String.format("%.0f", mob.getHealth()),
+				String.format("%.0f", mob.getMaxHealth()),
+				String.format("%.0f%%", hpPct * 100),
+				player.getGameProfile().name());
 			respond(player, mob, isEnglishUi(playerId)
 					? "(You are injured and low on health (" + String.format("%.0f%%", hpPct * 100) + "). You really hope player " + player.getGameProfile().name() + " can give you some food to heal. Act cute, complain about your wounds, or ask directly in character for something to eat.)"
 					: "（你受伤了，血量只剩" + String.format("%.0f%%", hpPct * 100) + "，你真心希望玩家" + player.getGameProfile().name() + "能给你点吃的补补血。用符合你性格的方式撒个娇、抱怨伤势、或者直接向玩家要吃的）", false);
@@ -1078,6 +1412,7 @@ public final class MobAiService {
 
 	public static void tryRandomGreeting(MinecraftServer server) {
 		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			if (!player.isAlive() || player.isSpectator() || player.isCreative()) continue;
 			java.util.UUID playerId = player.getUUID();
 			AABB box = player.getBoundingBox().inflate(8.0);
 			List<Mob> mobs = player.level().getEntitiesOfClass(Mob.class, box,
@@ -1099,6 +1434,118 @@ public final class MobAiService {
 			respond(player, mob, t("（玩家路过你身边，请主动打个招呼）", "(A player is passing by. Greet them proactively)", playerId), false);
 			return; // 每轮最多一只生物搭话
 		}
+	}
+
+	// ---------- 入口：村民小声议论玩家 ----------
+
+	/**
+	 * 玩家在村庄内走动时，附近两个村民偶尔会凑在一起小声议论玩家。
+	 * 不让村民实际发声（避免太吵），只给玩家发一条灰字系统消息，
+	 * 内容是根据好感度/记仇记录挑出的"几乎听不清"的只言片语。
+	 */
+	public static void tryVillagerGossip(MinecraftServer server) {
+		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			if (!player.isAlive() || player.isSpectator() || player.isCreative()) continue;
+			java.util.UUID playerId = player.getUUID();
+			// 玩家级冷却（60秒），避免频繁触发
+		long now = System.currentTimeMillis();
+		Long last = LAST_VILLAGER_WHISPER.get(playerId);
+		if (last != null && now - last < 60000) continue;
+
+		ServerLevel level = (ServerLevel) player.level();
+		// 村庄场景：isInVillage 结构检测为软条件——检测失败时不跳过，
+		// 靠下方"附近2+村民"作为 fallback 判定（isInVillage 在某些存档/村庄边缘会失效导致窃窃私语永不触发）
+		boolean villageStruct = isInVillage(level, player.blockPosition());
+
+			// 找附近16格内的村民（至少2个）
+			AABB box = player.getBoundingBox().inflate(16.0);
+			List<Villager> villagers = level.getEntitiesOfClass(Villager.class, box,
+					v -> v.isAlive() && PersonaRegistry.supports(v) && withinTalkRange(v, player));
+			if (villagers.size() < 2) continue;
+
+			// 玩家不能正贴着村民脸（>4格才触发"小声议论"氛围）
+			boolean tooClose = false;
+			for (Villager v : villagers) {
+				if (v.distanceToSqr(player) < 16.0) { tooClose = true; break; }
+			}
+			if (tooClose) continue;
+
+			// 概率触发（25%），避免每次检查都议论
+		if (player.getRandom().nextInt(100) >= 25) continue;
+
+		LAST_VILLAGER_WHISPER.put(playerId, now);
+		if (!villageStruct) MobMindMod.LOGGER.info("[MobMind] Villager gossip via villager fallback (isInVillage failed) for player {}", player.getName().getString());
+			Collections.shuffle(villagers);
+			Villager v1 = villagers.get(0);
+			Villager v2 = villagers.get(1);
+			boolean en = isEnglishUi(playerId);
+
+			// 改回灰字系统消息：不让村民实际发声（太吵），只给玩家自己看到两条灰字嘀咕片段
+		// 不显示村民名字/职业——既然是"隐约听到"就不应该看清是谁
+			long gameTime = level.getGameTime();
+			String frag1 = pickWhisperFragment(v1, playerId, gameTime, en);
+			String frag2 = pickWhisperFragment(v2, playerId, gameTime, en);
+			String prefix = en ? "§7...someone " : "§7……有人";
+			String sep = en ? "... " : "……";
+			player.sendSystemMessage(net.minecraft.network.chat.Component.literal(
+					prefix + sep + frag1));
+			player.sendSystemMessage(net.minecraft.network.chat.Component.literal(
+					prefix + sep + frag2));
+			return; // 每轮最多一个玩家被议论
+		}
+	}
+
+	/** 根据好感度和记仇记录，随机选一条"几乎听不清"的只言片语 */
+	private static String pickWhisperFragment(Villager villager, UUID playerId, long gameTime, boolean en) {
+		int friendship = MobMindState.friendship(villager, playerId);
+		List<MobMindState.Grudge> grudges = MobMindState.getActiveGrudges(villager, playerId, gameTime);
+
+		// 50% 概率提记仇（如果有）
+		if (!grudges.isEmpty() && villager.getRandom().nextInt(2) == 0) {
+			String grudge = grudges.get(villager.getRandom().nextInt(grudges.size())).description();
+			return en ? ("...that guy who " + grudge + "...") : ("……那个" + grudge + "的家伙……");
+		}
+
+		String[] fragments;
+		if (friendship < 0) {
+			fragments = en
+					? new String[]{"...that guy again...", "...watch him...", "...don't trust him...", "...he's trouble..."}
+					: new String[]{"……那家伙又来了……", "……小心那个人……", "……别信他……", "……他不是好东西……"};
+		} else if (friendship < 20) {
+			fragments = en
+					? new String[]{"...who's that stranger...", "...what does he want...", "...don't know him..."}
+					: new String[]{"……那个陌生人是谁……", "……他来干嘛……", "……不认识那个人……"};
+		} else if (friendship < 60) {
+			fragments = en
+					? new String[]{"...he's okay I guess...", "...seen him before...", "...not so bad..."}
+					: new String[]{"……他还行吧……", "……来过几次了……", "……还算面熟……"};
+		} else if (friendship < 80) {
+			fragments = en
+					? new String[]{"...he's a good one...", "...helped us before...", "...nice fellow..."}
+					: new String[]{"……他人不错……", "……上次帮过我们……", "……挺好的家伙……"};
+		} else {
+			fragments = en
+					? new String[]{"...when's he coming back...", "...such a good friend...", "...we owe him..."}
+					: new String[]{"……他啥时候再来……", "……真是个好人……", "……我们欠他的……"};
+		}
+		return fragments[villager.getRandom().nextInt(fragments.length)];
+	}
+
+	/** 检查位置是否在自然生成的村庄结构内 */
+	private static boolean isInVillage(ServerLevel level, BlockPos pos) {
+		try {
+			var structureManager = level.structureManager();
+			var structuresMap = structureManager.getAllStructuresAt(pos);
+			if (structuresMap == null || structuresMap.isEmpty()) return false;
+			var registry = level.registryAccess()
+					.lookup(net.minecraft.core.registries.Registries.STRUCTURE).orElse(null);
+			if (registry == null) return false;
+			for (Object structureObj : structuresMap.keySet()) {
+				var key = registry.getKey((net.minecraft.world.level.levelgen.structure.Structure) structureObj);
+				if (key != null && key.toString().toLowerCase().contains("village")) return true;
+			}
+		} catch (Exception ignored) {}
+		return false;
 	}
 
 	// ---------- 入口：10%敌对生物嘲讽创造模式玩家 ----------
@@ -1137,6 +1584,28 @@ public final class MobAiService {
 	private static boolean isPiglinBrute(Mob mob) {
 		return net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE
 				.getKey(mob.getType()).toString().equals("minecraft:piglin_brute");
+	}
+
+	/** 检查村民是否是农民职业 */
+	private static boolean isFarmer(Mob mob) {
+		if (mob instanceof net.minecraft.world.entity.npc.villager.Villager v) {
+			var profHolder = v.getVillagerData().profession();
+			return profHolder.unwrapKey()
+					.map(k -> k.identifier().getPath().equals("farmer"))
+					.orElse(false);
+		}
+		return false;
+	}
+
+	/** 检查村民是否是傻子（Nitwit） */
+	private static boolean isNitwit(Mob mob) {
+		if (mob instanceof net.minecraft.world.entity.npc.villager.Villager v) {
+			var profHolder = v.getVillagerData().profession();
+			return profHolder.unwrapKey()
+					.map(k -> k.identifier().getPath().equals("nitwit"))
+					.orElse(false);
+		}
+		return false;
 	}
 
 	private static boolean hasAnyGoldArmor(ServerPlayer player) {
@@ -1191,6 +1660,485 @@ public final class MobAiService {
 					"(He still didn't get up, so you endured it and found somewhere else to spend the night. Mutter something in your style)", playerId), false);
 	}
 
+	/** 玩家在你身上站着/跳，把你吵醒了——抱怨 */
+	public static void scoldSleepDisturbance(ServerPlayer player, Mob villager) {
+		java.util.UUID playerId = player.getUUID();
+		respond(player, villager, t(
+				"（你正睡得好好的，这个家伙居然站在你身上/在你身上跳来跳去把你吵醒了！你很不爽，迷迷糊糊地抱怨他，叫他别踩你、从你身上下去，语气要带着刚睡醒的烦躁和不满）",
+				"(You were sleeping soundly when this guy started standing on you/jumping on you and woke you up! You're annoyed, groggily complain at him, tell him to get off you, stop stepping on you. Sound half-asleep and irritated)",
+				playerId), false);
+	}
+
+	// ---------- 入口：村民房屋守卫 ----------
+
+	/** 玩家破坏了村民家附近的方块或容器 */
+	public static void scoldHousebreaker(ServerPlayer player, Mob villager, boolean isContainer, boolean isHouseBlock, String blockName, int offenses, int friendship) {
+		scoldHousebreaker(player, villager, isContainer, isHouseBlock, false, blockName, offenses, friendship);
+	}
+
+	/** 玩家破坏了村民家附近的方块或容器（含农作物标记） */
+	public static void scoldHousebreaker(ServerPlayer player, Mob villager, boolean isContainer, boolean isHouseBlock, boolean isCrop, String blockName, int offenses, int friendship) {
+		java.util.UUID playerId = player.getUUID();
+		boolean en = isEnglishUi(playerId);
+		String prompt;
+
+		if (isCrop) {
+			// 农作物被摘：村民把庄稼当作自己的劳动成果
+			if (offenses >= 5 || friendship < 0) {
+				prompt = en
+					? "(This player HARVESTED your " + blockName + "! That's YOUR hard-grown crop! They keep stealing from your farm! You are furious, yell at them for stealing your food, threaten to report them)"
+					: "（这个玩家摘了你的" + blockName + "！那是你辛苦种出来的庄稼！他老来偷你的菜！你勃然大怒，骂他偷你的粮食，威胁他说要报官）";
+			} else if (offenses >= 2) {
+				prompt = en
+					? "(This player just picked your " + blockName + "! That's your crop! Scold them sternly, tell them they can't just take what others grew, sound quite annoyed)"
+					: "（这个玩家摘了你的" + blockName + "！那是你的庄稼！严厉地斥责他，告诉他不能随便摘别人种的东西，语气很不高兴）";
+			} else {
+				prompt = en
+					? "(This player just harvested your " + blockName + "! You grew that! Rush over upset, ask them what they think they're doing taking your crop, tell them to keep their hands off your farm)"
+					: "（这个玩家摘了你的" + blockName + "！那是你种的！赶紧过去生气地质问他，叫他不要动你田里的庄稼）";
+			}
+		} else if (isContainer) {
+			if (offenses >= 5 || friendship < 0) {
+				// 多次犯案或好感度已为负：怒喝
+				prompt = en
+					? "(This player BROKE your " + blockName + " in your house! They've been vandalizing your home repeatedly! You are furious, yell at them angrily, threaten them, demand they leave immediately)"
+					: "（这个玩家拆了你家里的" + blockName + "！他已经多次在你家搞破坏了！你怒不可遏，愤怒地喝止他，威胁他，喝令他立刻滚出你的家）";
+			} else if (offenses >= 2) {
+				prompt = en
+					? "(This player broke your " + blockName + "! This isn't the first time. Scold them sternly, tell them to stop destroying your property, sound annoyed and warning)"
+					: "（这个玩家拆了你的" + blockName + "！这不是第一次了。严厉地斥责他，叫他不要再破坏你的东西，语气要生气并带警告）";
+			} else {
+				prompt = en
+					? "(This player just broke a " + blockName + " near your house! It's your property! Rush over to stop them, sound upset and tell them not to break things in your home)"
+					: "（这个玩家在你家附近拆了" + blockName + "！那是你的东西！赶紧过去阻止他，表达你的不满，叫他不要在你家里乱拆东西）";
+			}
+		} else if (isHouseBlock) {
+			if (offenses >= 5 || friendship < 0) {
+				prompt = en
+					? "(This player is DESTROYING YOUR HOUSE! They broke a " + blockName + "! You're enraged! Yell at them to stop, threaten them, chase them away)"
+					: "（这个玩家在拆你的房子！他敲掉了你的" + blockName + "！你愤怒到了极点！厉声喝止他，威胁他，把他赶走）";
+			} else if (offenses >= 2) {
+				prompt = en
+					? "(This player broke a " + blockName + " that's part of your house! Scold them angrily, tell them to stop vandalizing, demand they fix it or leave)"
+					: "（这个玩家拆了你房子的" + blockName + "！生气地斥责他，叫他不要搞破坏，要求他修好或者离开）";
+			} else {
+				prompt = en
+					? "(This player broke a " + blockName + " in your house! You're surprised and upset. Rush over, ask them what they think they're doing, tell them not to break your house)"
+					: "（这个玩家拆了你家里的" + blockName + "！你又惊讶又生气。赶紧过去，质问他在干什么，叫他不要拆你的房子）";
+			}
+		} else {
+			prompt = en
+				? "(This player broke something near your home. Go check it out and tell them to be more careful)"
+				: "（这个玩家在你家附近拆了什么东西。过去看看情况，叫他小心点）";
+		}
+
+		respond(player, villager, t(prompt, prompt, playerId), false);
+		MobMindState.recordGrudge(villager, playerId,
+				(isCrop ? "偷摘我的" + blockName : isContainer ? "破坏我的" + blockName : "破坏我房子的" + blockName),
+				villager.level().getGameTime() + 12000);
+	}
+
+	/** 玩家破坏了村民的工作站点（堆肥桶/高炉/砂轮等）→ 村民生气喝止 */
+	public static void scoldJobBlockDestroyer(ServerPlayer player, Mob villager, String jobBlockName, int offenses, int friendship) {
+		java.util.UUID playerId = player.getUUID();
+		boolean en = isEnglishUi(playerId);
+		String prompt;
+		if (offenses >= 5 || friendship < 0) {
+			prompt = en
+				? "(This player SMASHED your " + jobBlockName + "! That's YOUR work station! You've lost your job because of them! You're furious, yell at them for destroying your livelihood, threaten them)"
+				: "（这个玩家砸了你的" + jobBlockName + "！那是你的工作台！因为他你失业了！你怒不可遏，骂他毁了你吃饭的家伙，威胁他）";
+		} else if (offenses >= 2) {
+			prompt = en
+				? "(This player destroyed your " + jobBlockName + "! You need that to work! Scold them sternly, tell them they can't just break people's work stations, sound quite angry)"
+				: "（这个玩家砸了你的" + jobBlockName + "！你靠它干活呢！严厉地斥责他，告诉他不能随便砸别人的工作台，语气很生气）";
+		} else {
+			prompt = en
+				? "(This player just broke your " + jobBlockName + "! You're a villager and that was your work station! Rush over upset, ask them what they're doing, tell them to fix it or compensate you)"
+				: "（这个玩家砸了你的" + jobBlockName + "！你是村民，那是你的工作台！赶紧过去生气地质问他，叫他修好或者赔偿你）";
+		}
+		respond(player, villager, t(prompt, prompt, playerId), false);
+		MobMindState.recordGrudge(villager, playerId, "破坏我的工作方块" + jobBlockName,
+				villager.level().getGameTime() + 12000);
+	}
+
+	/** 玩家破坏了别人的工作方块（非自己的职业方块）→ 村民过来指责"那是别人的饭碗" */
+	public static void scoldOthersJobBlockDestroyer(ServerPlayer player, Mob villager, String jobBlockName, int offenses, int friendship) {
+		java.util.UUID playerId = player.getUUID();
+		boolean en = isEnglishUi(playerId);
+		String prompt;
+		if (offenses >= 5 || friendship < 0) {
+			prompt = en
+				? "(This player SMASHED a " + jobBlockName + "! That's ANOTHER villager's work station—you don't know whose exactly, but someone in this village just lost their job because of them! You're furious, yell at them for wrecking a neighbor's livelihood, threaten to call the iron golems)"
+				: "（这个玩家砸了一个" + jobBlockName + "！那是别的村民的工作台——你不知道具体是谁的，但村里有人因为他失业了！你怒不可遏，骂他毁邻居的饭碗，威胁要叫铁傀儡）";
+		} else if (offenses >= 2) {
+			prompt = en
+				? "(This player destroyed a " + jobBlockName + "! That's not yours, but it belongs to SOMEONE in this village! Scold them sternly, tell them they can't just break other people's work stations in the village, sound quite angry)"
+				: "（这个玩家砸了一个" + jobBlockName + "！那不是你的，但那是村里别人的！严厉地斥责他，告诉他不能随便砸村子里别人的工作台，语气很生气）";
+		} else {
+			prompt = en
+				? "(This player just broke a " + jobBlockName + "! That's a work station—not YOURS, but it belongs to another villager! Rush over upset, ask them what they're doing, tell them they're destroying someone else's livelihood, not just breaking blocks)"
+				: "（这个玩家砸了一个" + jobBlockName + "！那是工作方块——不是你的，是别的村民的！赶紧过去生气地质问他，告诉他他在毁别人的饭碗，不是在拆方块那么简单）";
+		}
+		respond(player, villager, t(prompt, prompt, playerId), false);
+		MobMindState.recordGrudge(villager, playerId, "破坏村里的" + jobBlockName,
+				villager.level().getGameTime() + 12000);
+	}
+
+	/** 玩家使用村民的工作方块（右键点击，非破坏）→ 村民过来询问 */
+	public static void scoldJobBlockUser(ServerPlayer player, Mob villager, String jobBlockName, int friendship) {
+		java.util.UUID playerId = player.getUUID();
+		boolean en = isEnglishUi(playerId);
+		String prompt;
+		if (en) {
+			prompt = "(Player " + player.getGameProfile().name() + " is using your " + jobBlockName
+					+ "! That's YOUR work station! Rush over, ask them what they think they're doing messing with your tools, "
+					+ "tell them to keep their hands off your work station. Not too hostile if you're on good terms, "
+					+ "but make it clear this is YOUR workspace.)";
+		} else {
+			prompt = "（玩家" + player.getGameProfile().name() + "在用你的" + jobBlockName
+					+ "！那是你的工作台！赶紧过去，质问他在动你的工具干什么，"
+					+ "叫他别碰你的工作台。如果关系好可以不那么敌对，但要明确这是你的工作地点。）";
+		}
+		respond(player, villager, t(prompt, prompt, playerId), false);
+	}
+
+	/** 玩家使用别人的工作方块（非自己的职业方块）→ 村民过来"那是别人的工作台，你动它干嘛" */
+	public static void scoldOthersJobBlockUser(ServerPlayer player, Mob villager, String jobBlockName, int friendship) {
+		java.util.UUID playerId = player.getUUID();
+		boolean en = isEnglishUi(playerId);
+		String prompt;
+		if (en) {
+			prompt = "(Player " + player.getGameProfile().name() + " is using a " + jobBlockName
+					+ "! That's not YOUR work station—it belongs to another villager! Walk over, ask them what they're doing "
+					+ "with someone else's tools. Tell them they shouldn't mess with another villager's work station. "
+					+ "Not as protective as if it were yours, but still disapproving—villagers look out for each other.)";
+		} else {
+			prompt = "（玩家" + player.getGameProfile().name() + "在用一个" + jobBlockName
+					+ "！那不是你的工作台——是别的村民的！走过去，问他在动别人的工具干嘛。"
+					+ "告诉他不该乱动别的村民的工作台。不像自己的东西那样护着，但还是不赞同——村民之间互相看着呢。）";
+		}
+		respond(player, villager, t(prompt, prompt, playerId), false);
+	}
+
+	/** 玩家破坏了村庄公共财产（干草捆/道路/路灯/水井等）→ 村民生气喝止 */
+	public static void scoldVillageVandal(ServerPlayer player, Mob villager, String blockName, int offenses, int friendship) {
+		java.util.UUID playerId = player.getUUID();
+		boolean en = isEnglishUi(playerId);
+		String prompt;
+		// 根据方块类型定制提示词
+		String lower = blockName.toLowerCase();
+		String thing;
+		if (lower.contains("hay") || lower.contains("干草")) {
+			thing = en ? "hay bale, the village's WINTER FOOD SUPPLY" : "干草捆，那是村子过冬的粮食储备";
+		} else if (lower.contains("bell") || lower.contains("钟")) {
+			thing = en ? "the village BELL, it warns us of danger and calls us to safety" : "村庄的钟，那是我们的警报器，有危险时靠它通知大家";
+		} else if (lower.contains("fence") && !lower.contains("gate") || lower.contains("栅栏") && !lower.contains("门")) {
+			thing = en ? "the village fence, it keeps our animals safe" : "村庄的栅栏，保护我们的牲畜不跑丢";
+		} else if (lower.contains("fence_gate") || lower.contains("栅栏门")) {
+			thing = en ? "the village fence gate, part of our animal pens" : "村庄的栅栏门，是我们牲畜圈的一部分";
+		} else if (lower.contains("torch") || lower.contains("火把")) {
+			thing = en ? "the village torch, it lights our streets at night" : "村庄的火把，照亮我们夜间的路";
+		} else if (lower.contains("campfire") || lower.contains("营火")) {
+			thing = en ? "the village campfire, where we gather and cook" : "村庄的营火，我们聚在一起做饭取暖的地方";
+		} else if (lower.contains("cauldron") || lower.contains("炼药锅")) {
+			thing = en ? "the village cauldron, shared by all" : "村庄的炼药锅，大家共用的";
+		} else if (lower.contains("water") && !lower.contains("cauldron") || lower.contains("水") && !lower.contains("锅")) {
+			thing = en ? "the village well water, our water source—don't fill it in!" : "村庄水井的水，那是我们的水源——别填水井！";
+		} else if (lower.contains("gravel") || lower.contains("砾石") || lower.contains("dirt_path") || lower.contains("grass_path") || lower.contains("草径")) {
+			thing = en ? "the village path, we walk on it every day" : "村庄的路，我们每天走的路";
+		} else if (lower.contains("wall") || lower.contains("墙") && !lower.contains("家")) {
+			thing = en ? "the village wall, it protects our homes" : "村庄的围墙，保护我们房子的";
+		} else if (lower.contains("bed") || lower.contains("床")) {
+			thing = en ? "a villager's bed" : "村民的床";
+		} else {
+			thing = en ? blockName + " that belongs to the village" : blockName + "，这是村子的公共设施";
+		}
+		if (offenses >= 5 || friendship < 0) {
+			prompt = en
+				? "(This player is DESTROYING THE VILLAGE! They broke " + thing + "! You're furious, yell at them for vandalizing the village, threaten to call the iron golem, demand they leave NOW!)"
+				: "（这个玩家在拆村子！他破坏了" + thing + "！你怒不可遏，骂他搞破坏，威胁他说再不走就叫铁傀儡来收拾他！）";
+		} else if (offenses >= 2) {
+			prompt = en
+				? "(This player destroyed " + thing + " again! That's village property! Scold them angrily, tell them they have no right to break things in the village, demand they stop)"
+				: "（这个玩家又在破坏" + thing + "！这是村里的东西！生气地斥责他，告诉他无权破坏村子的东西，叫他住手）";
+		} else {
+			prompt = en
+				? "(This player just broke " + thing + " in the village! Rush over upset, ask them what they think they're doing, tell them not to damage the village)"
+				: "（这个玩家破坏了村里的" + thing + "！赶紧过去生气地质问他，叫他不要破坏村子的东西）";
+		}
+		respond(player, villager, t(prompt, prompt, playerId), false);
+		MobMindState.recordGrudge(villager, playerId, "破坏村庄公共设施" + blockName,
+				villager.level().getGameTime() + 12000);
+	}
+
+	/** 玩家挖掉了村庄的钟——这是最严重的挑衅！ */
+	public static void scoldVillageBellDestroyer(ServerPlayer player, Mob villager, String blockName, int offenses, int friendship) {
+		java.util.UUID playerId = player.getUUID();
+		boolean en = isEnglishUi(playerId);
+		String prompt;
+		String pName = player.getGameProfile().name();
+
+		if (offenses >= 3 || friendship < 10) {
+			// 屡教不改或好感度极低——暴怒！
+			prompt = en
+				? "(THEY BROKE THE BELL!! THE VILLAGE BELL!! Player " + pName + " just DESTROYED our only warning bell! "
+				+ "You're absolutely LIVID—this is how we warn everyone when raiders come, when there's danger! "
+				+ "Scream at them in rage! Call for the iron golem! Demand they get out of the village RIGHT NOW before something terrible happens! One furious shout)"
+				: "（钟被挖了！！！村庄的钟啊！！玩家" + pName + "把我们唯一的警报钟给拆了！"
+				+ "你怒不可遏！那是我们遇到袭击、遇到危险时通知所有人的警报啊！"
+				+ "冲他怒吼！快去叫铁傀儡！叫他立刻滚出村子！再不走就不客气了！一句暴怒的喊骂）";
+		} else {
+			// 第一次/第二次挖钟——极度震惊和愤怒
+			prompt = en
+				? "(THE BELL! They broke THE VILLAGE BELL! Player " + pName + " just destroyed our meeting bell—our alarm for raids and danger! "
+				+ "You're SHOCKED and FURIOUS! Rush over yelling, demand to know what they think they're doing! "
+				+ "The bell is THE most important thing in the village—without it we can't warn each other! Scold them fiercely!)"
+				: "（钟！他们把村庄的钟挖了！玩家" + pName + "把我们的集会钟——也就是遇袭时报警的钟——给毁了！"
+				+ "你震惊极了，愤怒极了！冲过去大喊，质问他到底在干什么！"
+				+ "钟是村子里最重要的东西！没有它我们有危险怎么互相通知？严厉地骂他！）";
+		}
+		respond(player, villager, t(prompt, prompt, playerId), false);
+		MobMindState.recordGrudge(villager, playerId, "挖掉了村庄的钟！",
+				villager.level().getGameTime() + 24000); // 记住24000tick（20分钟）
+	}
+
+	/** 玩家在村民家附近翻箱子/开容器 */
+	public static void scoldContainerSnooper(ServerPlayer player, Mob villager, String containerName, int offenses, int friendship) {
+		java.util.UUID playerId = player.getUUID();
+		boolean en = isEnglishUi(playerId);
+		String prompt;
+
+		if (offenses >= 5 || friendship < 0) {
+			prompt = en
+				? "(This player is SNOOPING in your " + containerName + " AGAIN! They keep stealing from you! You're furious, yell at them to get their hands out, threaten to report them if they don't leave NOW)"
+				: "（这个玩家又在翻你的" + containerName + "了！他老想偷你东西！你勃然大怒，喝令他住手，威胁他再不离开就叫人来）";
+		} else if (offenses >= 2) {
+			prompt = en
+				? "(This player is rummaging through your " + containerName + " again! Scold them, tell them that's YOUR stuff and they shouldn't be looking through your things without permission, sound quite annoyed)"
+				: "（这个玩家又在乱翻你的" + containerName + "！斥责他，告诉他那是你的东西，不许随便翻别人的东西，语气很不高兴）";
+		} else {
+			prompt = en
+				? "(This player just opened your " + containerName + " without asking! Hurry over to them, sound surprised and a bit upset, ask them what they're looking for, tell them not to go through other people's belongings)"
+				: "（这个玩家没问过你就打开了你的" + containerName + "！赶紧走过去，语气有点惊讶和不满，问他在找什么，告诉他不要随便翻别人的东西）";
+		}
+
+		respond(player, villager, t(prompt, prompt, playerId), false);
+		MobMindState.recordGrudge(villager, playerId, "偷翻我的" + containerName,
+				villager.level().getGameTime() + 12000);
+	}
+
+	// ---------- 入口：玩家踩踏农田 ----------
+
+	private static final Map<UUID, Long> LAST_TRAMPLE_REACT = new ConcurrentHashMap<>();
+
+	/** 玩家踩踏农田 → 附近农民不满 */
+	public static void onFarmlandTrampled(ServerPlayer player, net.minecraft.server.level.ServerLevel level,
+										  BlockPos pos, boolean hadCrop) {
+		// 玩家自己锄的田 / 自己种的作物 → 不触发
+		if (com.mobmind.behavior.HouseGuard.isPlayerPlaced(pos)) return; // 农田是玩家锄的
+		if (hadCrop && com.mobmind.behavior.HouseGuard.isPlayerPlaced(pos.above())) return; // 作物是玩家种的
+		long now = System.currentTimeMillis();
+		Long last = LAST_TRAMPLE_REACT.get(player.getUUID());
+		if (last != null && now - last < 5000) return; // 5秒冷却
+		LAST_TRAMPLE_REACT.put(player.getUUID(), now);
+		var villagers = level.getEntitiesOfClass(net.minecraft.world.entity.npc.villager.Villager.class,
+				new net.minecraft.world.phys.AABB(pos).inflate(16.0));
+		if (villagers.isEmpty()) return;
+		java.util.UUID playerId = player.getUUID();
+		boolean en = isEnglishUi(playerId);
+		for (var v : villagers) {
+			if (!PersonaRegistry.supports(v)) continue;
+			// 只有农民才管农田
+			if (!isFarmer(v)) continue;
+			String prompt;
+			if (hadCrop) {
+				prompt = en
+					? "(Player " + player.getGameProfile().name() + " just JUMPED on your farmland and TRAMPLED YOUR CROPS! "
+					+ "You watched your hard work get destroyed under their boots! Rush over FURIOUS, scream at them for trampling the field, "
+					+ "demand they pay for the damage!)"
+					: "（玩家" + player.getGameProfile().name() + "在你的农田上乱跳，踩坏了你的庄稼！"
+					+ "你亲眼看着辛辛苦苦种的庄稼被他的靴子糟蹋了！冲过去暴怒，骂他踩坏田地，要他赔偿损失！）";
+			} else {
+				prompt = en
+					? "(Player " + player.getGameProfile().name() + " is jumping on your farmland! "
+					+ "Tell them to get off the soil, it ruins the farmland! Sound annoyed.)"
+					: "（玩家" + player.getGameProfile().name() + "在你的农田上跳来跳去！"
+					+ "叫他别踩田地，会把地踩坏的！语气不满。）";
+			}
+			respond(player, v, t(prompt, prompt, playerId), false);
+			MobMindState.adjustFriendship(v, playerId, hadCrop ? -5 : -2);
+			if (hadCrop) {
+				MobMindState.recordGrudge(v, playerId, "踩坏我的庄稼",
+						v.level().getGameTime() + 12000);
+			}
+		}
+	}
+
+	// ---------- 入口：玩家杀害村庄牲畜 / 剪羊毛 ----------
+
+	private static final java.util.Set<String> VILLAGE_LIVESTOCK = java.util.Set.of(
+			"cow", "pig", "sheep", "chicken", "rabbit", "mooshroom",
+			"horse", "donkey", "mule", "camel",
+			"cat", "wolf", "parrot" // 村庄宠物
+	);
+
+	/** 判断是否是村庄宠物（猫、狼、鹦鹉） */
+	private static boolean isVillagePet(String entityId) {
+		return entityId.equals("cat") || entityId.equals("wolf") || entityId.equals("parrot");
+	}
+
+	/** 玩家手持吸引物品（如红色蘑菇吸引僵尸马、诡异菌吸引炽足兽）→ 生物被吸引并说话（30秒冷却/生物） */
+	public static void tryTemptReact(MinecraftServer server) {
+		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			if (!player.isAlive() || player.isSpectator() || player.isCreative()) continue;
+			var stack = player.getMainHandItem();
+			if (stack.isEmpty()) continue;
+			java.util.UUID playerId = player.getUUID();
+			ServerLevel level = (ServerLevel) player.level();
+			// 找附近8格内的模组支持生物
+			AABB box = player.getBoundingBox().inflate(8.0);
+			List<Mob> mobs = level.getEntitiesOfClass(Mob.class, box,
+					m -> m.isAlive() && PersonaRegistry.supports(m) && withinTalkRange(m, player));
+			if (mobs.isEmpty()) continue;
+			long now = System.currentTimeMillis();
+			for (Mob mob : mobs) {
+				String entityId = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(mob.getType()).getPath();
+				var temptSet = TEMPT_ITEMS.get(entityId);
+				if (temptSet == null || !temptSet.contains(stack.getItem())) continue;
+				// 30秒冷却
+				Long last = LAST_TEMPT_REACT.get(mob.getUUID());
+				if (last != null && now - last < 30000) continue;
+				LAST_TEMPT_REACT.put(mob.getUUID(), now);
+				String itemName = stack.getHoverName().getString();
+				respond(player, mob, isEnglishUi(playerId)
+						? "(Player " + player.getGameProfile().name() + " is holding " + itemName
+						+ "—you're drawn to it, sniffing the air, wanting to follow them. React in your own style, one short line)"
+						: "（玩家" + player.getGameProfile().name() + "手上拿着" + itemName
+						+ "——你被它吸引，忍不住想凑过去闻闻、跟着他走。用你自己的风格反应一句短话）", false);
+				break; // 每次最多一只生物反应
+			}
+		}
+	}
+
+	/** 玩家在村庄农田里种植作物 → 附近农民来感谢（好感度+2，玩家级120秒冷却） */
+	public static void onPlayerPlantCrop(ServerPlayer player, ServerLevel level, BlockPos pos) {
+		if (!isInVillage(level, pos)) return;
+		if (com.mobmind.behavior.HouseGuard.isPlayerPlaced(pos.below())) return;
+		long now = System.currentTimeMillis();
+		java.util.UUID playerId = player.getUUID();
+		Long last = LAST_PLANT_THANKS.get(playerId);
+		if (last != null && now - last < 120000) return;
+		AABB box = new AABB(pos).inflate(16.0);
+		List<Villager> farmers = level.getEntitiesOfClass(Villager.class, box,
+				v -> v.isAlive() && PersonaRegistry.supports(v) && isFarmer(v) && withinTalkRange(v, player));
+		if (farmers.isEmpty()) return;
+
+		LAST_PLANT_THANKS.put(playerId, now);
+		Villager farmer = farmers.get(player.getRandom().nextInt(farmers.size()));
+		MobMindState.adjustFriendship(farmer, playerId, 2);
+		respond(player, farmer, isEnglishUi(playerId)
+				? "(Player " + player.getGameProfile().name() + " just planted crops in the village farm! You're a farmer and you're touched—someone actually helping with your work! Thank them warmly in your own style, one short line)"
+				: "（玩家" + player.getGameProfile().name() + "刚在村子农田里种了庄稼！你是农民，看到有人帮你干活很感动——用你自己的风格真诚地谢谢他，只说一句短话）", false);
+	}
+
+	/** 玩家在村庄农田里用骨粉催熟作物 → 附近农民来感谢（好感度+1，玩家级60秒冷却） */
+	public static void onPlayerBoneMealCrop(ServerPlayer player, ServerLevel level, BlockPos pos) {
+		if (!isInVillage(level, pos)) return;
+		// 被催熟的方块要是作物（检查是否是CropBlock或有AGE属性）
+		BlockState state = level.getBlockState(pos);
+		boolean isCrop = state.getBlock() instanceof net.minecraft.world.level.block.CropBlock
+				|| state.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.AGE_1)
+				|| state.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.AGE_2)
+				|| state.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.AGE_3)
+				|| state.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.AGE_4)
+				|| state.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.AGE_5)
+				|| state.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.AGE_7)
+				|| state.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.AGE_15)
+				|| state.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.AGE_25);
+		if (!isCrop) return;
+		// 玩家自己锄的田：如果是在自己田里用骨粉就不算
+		// 但是骨粉催熟自己种的作物也应该被感谢吗？用户说"他们种的庄稼"，所以不判断玩家放置
+		long now = System.currentTimeMillis();
+		java.util.UUID playerId = player.getUUID();
+		// 骨粉冷却和种植冷却共享，稍短一点（60秒）
+		Long last = LAST_PLANT_THANKS.get(playerId);
+		if (last != null && now - last < 60000) return;
+		AABB box = new AABB(pos).inflate(16.0);
+		List<Villager> farmers = level.getEntitiesOfClass(Villager.class, box,
+				v -> v.isAlive() && PersonaRegistry.supports(v) && isFarmer(v) && withinTalkRange(v, player));
+		if (farmers.isEmpty()) return;
+
+		LAST_PLANT_THANKS.put(playerId, now);
+		Villager farmer = farmers.get(player.getRandom().nextInt(farmers.size()));
+		MobMindState.adjustFriendship(farmer, playerId, 1);
+		respond(player, farmer, isEnglishUi(playerId)
+				? "(Player " + player.getGameProfile().name() + " just used bone meal to speed up crops in the village farm! The crops grew faster thanks to them—you're pleased and grateful. Thank them warmly, one short line)"
+				: "（玩家" + player.getGameProfile().name() + "刚用骨粉帮村里的庄稼催熟！作物长得更快了，你很高兴，感谢他。用你自己的风格真诚地道谢，只说一句短话）", false);
+	}
+
+	/** 玩家在村庄附近杀害牲畜 → 附近村民愤怒喝止 */
+	public static void onLivestockKilledByPlayer(net.minecraft.world.entity.animal.Animal animal, ServerPlayer player,
+												 net.minecraft.server.level.ServerLevel level) {
+		String entityId = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(animal.getType()).getPath();
+		if (!VILLAGE_LIVESTOCK.contains(entityId)) return;
+		// 被敌对怪物骑乘的动物（鸡骑士的鸡等）不是村民的牲畜，不触发
+		if (isMountedByHostileMonster(animal)) return;
+		// 找附近16格内的村民
+		var villagers = level.getEntitiesOfClass(net.minecraft.world.entity.npc.villager.Villager.class,
+				animal.getBoundingBox().inflate(16.0));
+		if (villagers.isEmpty()) return;
+		String animalName = translateMobName(entityId);
+		for (var v : villagers) {
+			if (!PersonaRegistry.supports(v)) continue;
+			java.util.UUID playerId = player.getUUID();
+			boolean en = isEnglishUi(playerId);
+			int friendship = MobMindState.friendship(v, playerId);
+			String prompt;
+			if (en) {
+				prompt = "(Player " + player.getGameProfile().name() + " just KILLED a " + animalName
+						+ "! That's village livestock—we raise them ourselves and let them roam free around the village! You're horrified and furious—scream at them for slaughtering the animals you raised, demand they leave the village at once!)";
+			} else {
+				prompt = "（玩家" + player.getGameProfile().name() + "杀了一头" + animalName
+						+ "！那是村里的牲畜——是我们亲手养大、散养在村子里的！你既惊恐又愤怒——尖叫着骂他滥杀你养大的动物，喝令他立刻离开村子！）";
+			}
+			respond(player, v, t(prompt, prompt, playerId), false);
+			MobMindState.adjustFriendship(v, playerId, -8);
+			MobMindState.recordGrudge(v, playerId, "杀害村庄的" + animalName,
+					v.level().getGameTime() + 12000);
+		}
+	}
+
+	/** 玩家在村庄附近剪羊毛 → 附近村民不满 */
+	private static final Map<UUID, Long> LAST_SHEAR_REACT = new ConcurrentHashMap<>();
+
+	public static void onSheepShearedByPlayer(net.minecraft.world.entity.animal.sheep.Sheep sheep, ServerPlayer player,
+											 net.minecraft.server.level.ServerLevel level) {
+		java.util.UUID sheepId = sheep.getUUID();
+		long now = System.currentTimeMillis();
+		Long last = LAST_SHEAR_REACT.get(sheepId);
+		if (last != null && now - last < 30000) return; // 30秒冷却
+		LAST_SHEAR_REACT.put(sheepId, now);
+		// 找附近16格内的村民
+		var villagers = level.getEntitiesOfClass(net.minecraft.world.entity.npc.villager.Villager.class,
+				sheep.getBoundingBox().inflate(16.0));
+		if (villagers.isEmpty()) return;
+		for (var v : villagers) {
+			if (!PersonaRegistry.supports(v)) continue;
+			java.util.UUID playerId = player.getUUID();
+			boolean en = isEnglishUi(playerId);
+			String prompt;
+			if (en) {
+				prompt = "(Player " + player.getGameProfile().name() + " just sheared one of the village sheep without asking! "
+						+ "That wool belongs to the village! Scold them for taking what isn't theirs, tell them they should have asked first.)";
+			} else {
+				prompt = "（玩家" + player.getGameProfile().name() + "没经过同意就剪了村里的羊毛！"
+						+ "那些羊毛是村子的！斥责他拿别人的东西，告诉他应该先问过才行。）";
+			}
+			respond(player, v, t(prompt, prompt, playerId), false);
+			MobMindState.adjustFriendship(v, playerId, -3);
+		}
+	}
+
 	/** 玩家在以物易物中欺骗生物：给错物品/给错药水类型，生物发怒攻击 */
 	public static void onPlayerCheatedBarter(Mob mob, ServerPlayer player, String expectedDesc, String actualDesc) {
 		java.util.UUID playerId = player.getUUID();
@@ -1227,7 +2175,7 @@ public final class MobAiService {
 			if (cfg.offlineFallback) {
 				if (OFFLINE_NOTIFIED.add(player.getUUID())) {
 					sendSystem(player, net.minecraft.network.chat.Component.translatable("status.mobmind.api_not_set_fallback"));
-					MobMindMod.LOGGER.info("[MobMind] API 未配置，{} 的对话使用离线兜底回复", player.getGameProfile().name());
+					MobMindMod.LOGGER.info("[MobMind] API not configured, {} conversation using offline fallback reply", player.getGameProfile().name());
 				}
 				ParsedReply fallback = offlineReply(persona, mob, player, userText);
 				finish(server, player, mob, persona, fallback, applyActions);
@@ -1247,17 +2195,30 @@ public final class MobAiService {
 				List<OpenAiClient.ChatMessage> messages = buildMessages(persona, mob, player, userText);
 				String raw = OpenAiClient.chat(cfg, messages);
 				long aiMs = System.currentTimeMillis() - t0;
-				MobMindMod.LOGGER.info("[MobMind] AI 响应 {}ms, 原始回复: {}", aiMs,
-						raw.length() > 500 ? raw.substring(0, 500) : raw);
+				MobMindMod.LOGGER.info("[MobMind] AI response {}ms, raw reply: {}", aiMs,
+					raw.length() > 500 ? raw.substring(0, 500) : raw);
 				ParsedReply reply = parse(raw, persona);
 				server.execute(() -> finish(server, player, mob, persona, reply, applyActions));
 			} catch (Exception e) {
-				MobMindMod.LOGGER.warn("[MobMind] AI 调用失败: {}", e.getMessage());
+				String errMsg = friendlyErrorMessage(e, cfg);
+				String logMsg = e.getMessage() != null ? e.getMessage() : e.getClass().getName();
+				MobMindMod.LOGGER.warn("[MobMind] AI call failed: {}", logMsg, e);
 				server.execute(() -> {
+					// 始终向玩家显示错误提示（10秒冷却防刷屏）
+					long now = System.currentTimeMillis();
+					Long lastErr = LAST_ERROR_NOTIFY.get(player.getUUID());
+					if (lastErr == null || now - lastErr >= ERROR_NOTIFY_COOLDOWN) {
+						LAST_ERROR_NOTIFY.put(player.getUUID(), now);
+						boolean english = isEnglishUi(player.getUUID());
+						// 直接发送红色消息到聊天栏，不使用灰色前缀
+						String fullMsg = english
+								? "§c[MobMind] AI error: " + errMsg
+								: "§c[生物心智] AI 调用失败：" + errMsg;
+						player.sendSystemMessage(net.minecraft.network.chat.Component.literal(fullMsg));
+						MobMindMod.LOGGER.info("[MobMind] Error notification sent to player {}", player.getGameProfile().name());
+					}
 					if (MobMindConfig.get().offlineFallback) {
 						finish(server, player, mob, persona, offlineReply(persona, mob, player, userText), applyActions);
-					} else {
-						sendSystem(player, net.minecraft.network.chat.Component.translatable("status.mobmind.api_error", e.getMessage()));
 					}
 				});
 			} finally {
@@ -1276,14 +2237,14 @@ public final class MobAiService {
 			action = BehaviorActions.apply(mob, player, reply.action());
 		}
 		Bargain bargain = reply.bargain();
-		if (bargain == null && applyActions && mob instanceof AbstractVillager av) { // 模型漏输出 bargain 字段时兜底
+		if (bargain == null && applyActions && mob instanceof net.minecraft.world.item.trading.Merchant av) { // 模型漏输出 bargain 字段时兜底
 			bargain = extractBargainFromText(lastUserText(mob.getUUID(), player.getUUID()), reply.say(), av, player.getUUID());
 		}
-		if (bargain != null && mob instanceof AbstractVillager villager) {
-			MobMindMod.LOGGER.info("[MobMind] 砍价: {} 对 {} 商品「{}」 agree={}",
-					player.getGameProfile().name(), mob.getType().getDescription().getString(),
-					bargain.item(), bargain.agree());
-			BarterActions.applyBargain(villager, player, persona, bargain.item(), bargain.agree());
+		if (bargain != null && mob instanceof net.minecraft.world.item.trading.Merchant merchant) {
+			MobMindMod.LOGGER.info("[MobMind] Bargain: {} on {} item \"{}\" agree={}",
+				player.getGameProfile().name(), mob.getType().getDescription().getString(),
+				bargain.item(), bargain.agree());
+			BarterActions.applyBargain(merchant, player, persona, bargain.item(), bargain.agree());
 		}
 		// 砍价场景（bargain不为null）是修改交易界面价格，不应创建以物易物约定或记录赠送承诺
 		// （砍价对话中常出现"X换Y"和"给你"等字眼，容易被误识别为交易/赠送）
@@ -1328,9 +2289,9 @@ public final class MobAiService {
 				}
 				if (!promisedReqs.isEmpty()) {
 					MobMindState.setGiftPromise(mob, player.getUUID(), promisedReqs, !promisedResult.isFreeGift);
-					MobMindMod.LOGGER.info("[MobMind] 记录承诺: {} 答应给 {}: {} (免费={})",
-							mob.getType().getDescription().getString(),
-							player.getGameProfile().name(), describe(promised), promisedResult.isFreeGift);
+					MobMindMod.LOGGER.info("[MobMind] Recorded promise: {} agreed to give {}: {} (free={})",
+						mob.getType().getDescription().getString(),
+						player.getGameProfile().name(), describe(promised), promisedResult.isFreeGift);
 				}
 			}
 		}
@@ -1377,6 +2338,17 @@ public final class MobAiService {
 				? t("空手", "empty hand", playerId)
 				: (english ? getEnglishItemName(player.getMainHandItem()) : player.getMainHandItem().getHoverName().getString());
 		boolean targetingPlayer = mob.getTarget() == player;
+		// 怨恨记忆：即使攻击目标被清除，AI仍记得玩家最近做了什么惹怒它的事
+		long gameTime = level.getGameTime();
+		var grudges = MobMindState.getActiveGrudges(mob, player.getUUID(), gameTime);
+		StringBuilder grudgeText = new StringBuilder();
+		if (!grudges.isEmpty()) {
+			grudgeText.append(english ? "\n- You still hold a grudge against this player for: " : "\n- 你对这名玩家还记恨在心，因为：");
+			for (var g : grudges) {
+				grudgeText.append("\n  • ").append(g.description());
+			}
+			grudgeText.append(english ? "\n  Stay angry and cold toward them. Don't forgive easily." : "\n  保持愤怒和冷淡，别轻易原谅。");
+		}
 		String relation = friendship < 20 ? t("死敌", "mortal enemy", playerId)
 				: friendship < 40 ? t("陌生", "stranger", playerId)
 				: friendship < 60 ? t("认识", "acquaintance", playerId)
@@ -1391,6 +2363,70 @@ public final class MobAiService {
 				? t("\n- 你极度渴望和玩家公平决斗：只要他还在创造模式，你就忍不住三句不离让他换成生存模式再来面对你。",
 						"\n- You crave a fair duel with the player: as long as they are in Creative mode, you can't stop taunting them to switch to Survival and face you.", playerId)
 				: "";
+		tauntTrait += grudgeText.toString();
+
+		// 傻子村民：说话简单、有点呆（注意：要简单但有条理，不能语无伦次）
+		if (isNitwit(mob)) {
+			tauntTrait += english
+				? "\n- You are the village NITWIT (genuinely slow-witted, not pretending). Speak this way:\n"
+				+ "  1. VERY short sentences. Simple words. Talk slowly with long pauses like 'Uhh...', 'Um...', 'I... I think...', 'wait...'.\n"
+				+ "  2. React SLOWLY—sometimes you blank out and stare for a moment before answering.\n"
+				+ "  3. Often say silly things, go off-topic, or answer the wrong question. That's normal for you.\n"
+				+ "  4. Kind-hearted but NOT clever. NEVER sound smart, witty, quick, or articulate. You are genuinely dim.\n"
+				+ "  5. For ANY question that's even slightly complex, just say 'I dunno...', 'Too hard for me...', 'Go ask someone else...'. Don't even try.\n"
+				+ "  6. Sometimes mix up words or lose your train of thought mid-sentence.\n"
+				+ "IMPORTANT: You must sound genuinely slow and simple—NOT like a normal person dumbing down. "
+				+ "Keep replies to 1-2 short sentences. Do NOT be coherent or quick-witted."
+				: "\n- 你是村里的傻子村民（Nitwit，脑子真的不太好使，是真的呆，不是装的）。按这些规则说话：\n"
+				+ "  1. 句子要很短很简单，慢慢说，经常停顿发呆（'呃...'、'嗯...'、'那个...'、'我想想哦...'）\n"
+				+ "  2. 反应慢半拍，有时候愣一下、发一会儿呆才回过神来\n"
+				+ "  3. 经常说傻话或跑题，答非所问也是正常的\n"
+				+ "  4. 心地善良但绝不机灵，绝对不要表现得聪明、机智、口齿伶俐。你是真的憨\n"
+				+ "  5. 别人问稍微复杂点的问题，直接说'我不懂...'、'太难了...'、'你去问别人吧...'，别费劲想\n"
+				+ "  6. 说话偶尔颠三倒四，想半天才能说完一句\n"
+				+ "重要：你必须表现得很呆很憨，不能像正常人一样对答如流。回复只要1-2句短话就行。"
+				+ "简单是真的简单，不是假装简单。";
+		}
+
+		// 幼年生物：天真活泼（称呼多样化，不只用"大个子"）
+		if (mob.isBaby()) {
+			String babyEntityId = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE
+					.getKey(mob.getType()).getPath();
+			// 幼年骷髅马专属风格
+			if (babyEntityId.equals("skeleton_horse")) {
+				tauntTrait += english
+					? "\n- You are a BABY Skeleton Horse! A tiny clattering pile of bones—a colt made of ivory skeleton. "
+					+ "You're skittish, curious, playful. You make little clickety-clack sounds when you walk. "
+					+ "You don't really get what 'undead' means—you think you're just a normal little horse. "
+					+ "Bones rattling = excitement or happiness. "
+					+ "Vary how you address the player: 'big person', 'tall one', 'mister', 'miss', 'big friend', 'sir', 'madam'—don't repeat the same one. "
+					+ "Speak in short excited sentences."
+					: "\n- 你是一匹小骷髅马！一堆咔嗒作响的小骨头——一匹象牙白的小马驹。"
+					+ "你胆小、好奇、爱玩。走路时发出细细的咔嗒咔嗒声。"
+					+ "你不太懂'亡灵'是什么——你只觉得自己是匹普通的小马。"
+					+ "骨头咔嗒响 = 兴奋或开心。"
+					+ "称呼玩家要换着来：'大个子'、'大人'、'哥哥'、'姐姐'、'高高的那个'、'大朋友'、'先生'、'女士'——别老用同一个。"
+					+ "用短促兴奋的句子说话。";
+			} else {
+				// 其他幼年生物的通用提示词
+				tauntTrait += english
+					? "\n- You are a BABY. You're young, small, curious and energetic. "
+					+ "Speak in a childlike way—short sentences, lots of emotion, easily excited or scared. "
+					+ "You look up to adults. Vary how you address the player: 'big person', 'tall one', 'mister', 'miss', 'big friend', 'sir', 'madam'—don't always use the same word."
+					: "\n- 你是一个幼崽。你年幼、渺小、好奇且精力旺盛。"
+					+ "用孩子气的方式说话——短句子、情绪丰富、容易兴奋或害怕。"
+					+ "你仰慕大人。称呼玩家要换着来：'大个子'、'大人'、'哥哥'、'姐姐'、'高高的那个'、'大朋友'、'先生'、'女士'——别老用同一个词。";
+			}
+		} else if (com.mobmind.persona.PersonaRegistry.hasBabyPersona(mob)) {
+			// 已成年（曾有幼年设定）：切换成熟口吻，禁用幼崽称呼
+			tauntTrait += english
+				? "\n- You are now a GROWN ADULT (no longer a baby). Speak in a mature, calm tone. "
+				+ "Do NOT use childish address like 'big person', 'tall one', 'mister', 'miss', 'big friend'. "
+				+ "Address the player as an equal adult would. No baby talk."
+				: "\n- 你现在已经是成年个体了（不再是幼崽）。说话要成熟、稳重。"
+				+ "绝对不要再用“哥哥”、“姐姐”、“大个子”、“大人”、“高高的那个”、“大朋友”等幼崽称呼。"
+				+ "像成年人一样正常称呼玩家，不要用孩子气的口吻。";
+		}
 		String environment = EnvironmentSense.describe(mob, english);
 
 		PersonaRegistry.Persona spec = PersonaRegistry.forMob(mob);
@@ -1412,9 +2448,9 @@ public final class MobAiService {
 
 		// 村民/流浪商人：注入在售商品列表供砍价参考
 		StringBuilder offersSection = new StringBuilder();
-		if (mob instanceof AbstractVillager villager && !villager.getOffers().isEmpty()) {
+		if (mob instanceof net.minecraft.world.item.trading.Merchant merchant && !merchant.getOffers().isEmpty()) {
 			offersSection.append(english ? "[Items You Are Selling]\n" : "【你在售的商品】\n");
-			var offers = villager.getOffers();
+			var offers = merchant.getOffers();
 			for (int i = 0; i < Math.min(offers.size(), 12); i++) {
 				var o = offers.get(i);
 				String costA = english ? getEnglishItemName(o.getCostA()) : o.getCostA().getHoverName().getString();
@@ -1442,6 +2478,7 @@ public final class MobAiService {
 					[Relationship with Player]
 					- Player name: %s, Friendship: %d/100 (Relation: %s)
 					- Player game mode: %s%s
+					- %s
 					[Current Situation]
 					- Health %.0f/%.0f, %s, weather: %s
 					- Player holding: %s
@@ -1468,6 +2505,7 @@ public final class MobAiService {
 					persona.sociability, persona.temper, persona.humor,
 					player.getGameProfile().name(), friendship, relation,
 					gameMode, tauntTrait,
+					playerSkinGenderHint(player, true),
 					mob.getHealth(), mob.getMaxHealth(), timeDesc, weather, hand,
 					targetingPlayer ? "yes" : "no", environment, offersSection.toString());
 		} else {
@@ -1482,6 +2520,7 @@ public final class MobAiService {
 					【与玩家的关系】
 					- 玩家名: %s，好感度: %d/100（关系: %s）
 					- 玩家游戏模式: %s%s
+					- %s
 					【当前处境】
 					- 生命值 %.0f/%.0f，%s，天气%s
 					- 玩家手持: %s
@@ -1508,6 +2547,7 @@ public final class MobAiService {
 					persona.sociability, persona.temper, persona.humor,
 					player.getGameProfile().name(), friendship, relation,
 					gameMode, tauntTrait,
+					playerSkinGenderHint(player, false),
 					mob.getHealth(), mob.getMaxHealth(), timeDesc, weather, hand,
 					targetingPlayer ? "是" : "否", environment, offersSection.toString());
 		}
@@ -1557,6 +2597,7 @@ public final class MobAiService {
 				String action = o.has("action") ? o.get("action").getAsString().trim().toLowerCase() : "none";
 				int delta = o.has("friendship") ? o.get("friendship").getAsInt() : 0;
 				delta = Math.max(-10, Math.min(10, delta));
+				say = cleanReplyText(say);
 				if (say.isEmpty()) say = "……";
 				return new ParsedReply(say, mood, BehaviorActions.isValid(action) ? action : "none", delta,
 						parseBargain(o), parseBarter(o));
@@ -1568,15 +2609,40 @@ public final class MobAiService {
 		java.util.regex.Matcher m = java.util.regex.Pattern
 				.compile("\"say\"\\s*:\\s*\"([^\"]{1,300})\"").matcher(raw);
 		if (m.find()) {
-			return new ParsedReply(m.group(1).trim(), "平静", "none", 0, null, null);
+			String say = cleanReplyText(m.group(1).trim());
+			return new ParsedReply(say.isEmpty() ? "……" : say, "平静", "none", 0, null, null);
 		}
 		String cleaned = raw.replaceAll("<\\|[^|]*\\|>", "").trim();
+		cleaned = cleanReplyText(cleaned);
 		// 内容仍像 JSON 碎片（含其他字段名），不当作台词
-		if (cleaned.contains("\"mood\"") || cleaned.contains("\"action\"") || cleaned.contains("\"friendship\"")) {
+		if (cleaned.contains("\"mood\"") || cleaned.contains("\"action\"") || cleaned.contains("\"friendship\"")
+				|| cleaned.contains("\"bargain\"") || cleaned.contains("\"barter\"")) {
 			return new ParsedReply("……", "平静", "none", 0, null, null);
 		}
 		if (cleaned.length() > 120) cleaned = cleaned.substring(0, 120);
 		return new ParsedReply(cleaned.isEmpty() ? "……" : cleaned, "平静", "none", 0, null, null);
+	}
+
+	/**
+	 * 清理AI回复台词：移除不应显示给玩家的内部元数据泄露，
+	 * 如"好感度-5"、"友情度+3"、"action: follow"等。
+	 */
+	private static String cleanReplyText(String text) {
+		if (text == null || text.isBlank()) return "";
+		String t = text;
+		// 移除JSON碎片残留
+		t = t.replaceAll("\"(say|mood|action|friendship|bargain|barter)\"\\s*:\\s*[^,}]*", "");
+		// 移除中文好感度变化描述（如"好感度-5"、"友情度减5"、"好感度+3"、"友情度加2"）
+		t = t.replaceAll("(好感度|友情度|好感|友情)\\s*[加减增减\\-+]\\s*\\d+", "");
+		// 移除英文friendship变化描述
+		t = t.replaceAll("(?i)friendship\\s*(change|delta|point)?\\s*[加减增减:：\\-+]\\s*-?\\d+", "");
+		// 移除action动作指令残留
+		t = t.replaceAll("(?i)action\\s*[:：=]\\s*(none|calm|follow|stay|flee|gift|attack)", "");
+		// 清理多余标点和空白
+		t = t.replaceAll("[，。！？、；,\\.!\\?;\\s]+$", "");
+		t = t.replaceAll("^[，。！？、；,\\.!\\?;\\s]+", "");
+		t = t.trim();
+		return t;
 	}
 
 	private static Bargain parseBargain(JsonObject o) {
@@ -1674,14 +2740,14 @@ public final class MobAiService {
 	/**
 	 * 砍价兜底：玩家明确讨价还价且提到某个在售商品，生物台词接受/拒绝 → 按结果处理。
 	 */
-	private static Bargain extractBargainFromText(String userText, String say, AbstractVillager villager, java.util.UUID playerId) {
+	private static Bargain extractBargainFromText(String userText, String say, net.minecraft.world.item.trading.Merchant merchant, java.util.UUID playerId) {
 		if (userText == null || say == null || userText.startsWith("（") || userText.startsWith("(")) return null;
 		boolean english = isEnglishUi(playerId);
 		if (!HAGGLE_INTENT.matcher(userText).find()) return null;
 		ItemCatalog.MatchedItem wanted = ItemCatalog.findInText(userText, false, english);
 		if (wanted == null) return null;
 		String offerName = null;
-		var offers = villager.getOffers();
+		var offers = merchant.getOffers();
 		for (int i = 0; i < offers.size(); i++) {
 			if (offers.get(i).getResult().is(wanted.item())) {
 				offerName = offers.get(i).getResult().getHoverName().getString();
@@ -1715,7 +2781,7 @@ public final class MobAiService {
 		// 放宽接受判断：只要台词没拒绝就算接受，提高约定成功率
 		boolean explicitAccept = ACCEPT_PATTERN.matcher(say).find();
 		if (!explicitAccept) {
-			MobMindMod.LOGGER.info("[MobMind] 以物易物兜底：生物未明确接受，但尝试识别约定");
+			MobMindMod.LOGGER.info("[MobMind] Barter fallback: mob did not explicitly accept, but attempting to identify deal");
 		}
 
 		int sep = -1;
@@ -1767,7 +2833,7 @@ public final class MobAiService {
 		boolean overlap = gives.stream().anyMatch(g ->
 				takes.stream().anyMatch(t -> t.item() == g.item()));
 		if (overlap) return null;
-		MobMindMod.LOGGER.info("[MobMind] 文本兜底识别约定: 玩家给 {} 换 {}",
+		MobMindMod.LOGGER.info("[MobMind] Text fallback identified deal: player gives {} for {}",
 				describe(gives), describe(takes));
 		return new Barter(gives, takes);
 	}
@@ -1947,5 +3013,1309 @@ public final class MobAiService {
 
 	private static void sendSystem(ServerPlayer player, net.minecraft.network.chat.Component msg) {
 		player.sendSystemMessage(net.minecraft.network.chat.Component.literal("§7").append(msg));
+	}
+
+	/** Convert exception to user-friendly error message (bilingual based on UI language) */
+	private static String friendlyErrorMessage(Exception e, MobMindConfig cfg) {
+		boolean english = false;
+		try { english = isEnglishUi(); } catch (Exception ignored) {}
+		String msg = e.getMessage();
+		if (msg == null) msg = e.getClass().getSimpleName();
+
+		// Connection refused
+		if (e instanceof java.net.ConnectException || msg.contains("Connection refused") || msg.contains("connect timed out")) {
+			if (cfg.isLocalEndpoint()) {
+				return english ? "Cannot connect to local Ollama (127.0.0.1:11434). Is Ollama running?"
+						: "无法连接到本地 Ollama（127.0.0.1:11434），请确认 Ollama 是否已启动。";
+			}
+			return english ? "Cannot connect to API server (" + cfg.normalizedEndpoint() + "). Check your network and endpoint URL."
+					: "无法连接到 API 服务器（" + cfg.normalizedEndpoint() + "），请检查网络和端点地址。";
+		}
+		// DNS failure
+		if (e instanceof java.net.UnknownHostException || msg.contains("UnknownHost")) {
+			return english ? "Cannot resolve host. Check your endpoint URL."
+					: "无法解析域名，请检查端点地址是否正确。";
+		}
+		// Timeout
+		if (msg.contains("timed out") || msg.contains("timeout") || e instanceof java.net.http.HttpTimeoutException) {
+			return english ? "Request timed out. The model may be loading (first run takes longer) or the server is slow. Wait and try again."
+					: "请求超时，模型可能正在加载中（首次运行较慢）或服务器响应慢，请稍等片刻再试。";
+		}
+		// Empty response / Non-JSON / wrong endpoint (e.g. /api/chat instead of /v1)
+		if (msg.contains("Empty response body") || msg.contains("Non-JSON response")) {
+			return english ? "Invalid response. Check your endpoint URL - for Ollama use: http://127.0.0.1:11434/v1 (do NOT use /api/chat)"
+					: "API 返回无效响应。请检查端点地址——Ollama 用户应填：http://127.0.0.1:11434/v1（不要填 /api/chat）";
+		}
+		// Model error (Ollama returns {"error":"model not found"})
+		if (msg.startsWith("Model error:")) {
+			String detail = msg.substring("Model error:".length()).trim();
+			String localModels = cfg.isLocalEndpoint() ? MobMindConfig.listLocalOllamaModels() : null;
+			if (localModels != null) {
+				return english ? "Model error: " + detail + ". Configured model: '" + cfg.chatModel + "'. Available local models: " + localModels + ". Press Ctrl+K to change model name, or run 'ollama pull " + cfg.chatModel + "' to download it."
+						: "模型错误：" + detail + "。当前配置模型: '" + cfg.chatModel + "'。本地已安装模型: " + localModels + "。按 Ctrl+K 修改模型名，或运行 ollama pull " + cfg.chatModel + " 下载。";
+			}
+			return english ? "Model error: " + detail + ". Check model name (current: " + cfg.chatModel + ") and run 'ollama pull' to download it."
+					: "模型错误：" + detail + "。请确认模型名是否正确（当前: " + cfg.chatModel + "），并运行 ollama pull 下载模型。";
+		}
+		// Thinking model ran out of tokens (finish_reason=length, content empty but reasoning exists)
+		if (msg.contains("tokens for thinking and was cut off") || msg.contains("finish_reason=length")) {
+			return english ? "Model used all tokens for thinking and was cut off. Increase max_tokens in settings (Ctrl+K, set to 2048+). Current: " + cfg.maxTokens
+					: "模型把token全用在思考上被截断了。请按 Ctrl+K 打开设置，把最大Token数调到2048以上。当前: " + cfg.maxTokens;
+		}
+		// Model returned only thinking content (no actual reply)
+		if (msg.contains("only thinking") || msg.contains("no actual reply") || msg.contains("no reply")) {
+			return english ? "Model returned only thinking content (no reply). This model has thinking enabled. Try increasing max_tokens or use a non-thinking model (e.g. gemma4:e4b)."
+					: "模型只返回了思考内容，没有实际回复。思考模型需要更多token，请按 Ctrl+K 把最大Token数调到2048以上，或换用非思考模型（如 gemma4:e4b）。";
+		}
+		// Empty choices / content null / empty content / parse failure
+		if (msg.contains("Empty choices") || msg.contains("content is null") || msg.contains("Empty content from model") || msg.contains("Failed to parse response")) {
+			String localModels = cfg.isLocalEndpoint() ? MobMindConfig.listLocalOllamaModels() : null;
+			if (localModels != null) {
+				return english ? "Model returned empty/invalid response. Model: '" + cfg.chatModel + "'. Available models: " + localModels + ". Press Ctrl+K to select a different model. Make sure endpoint uses /v1 (not /api/chat)."
+						: "模型返回空内容或无效响应。当前模型: '" + cfg.chatModel + "'。本地已安装模型: " + localModels + "。按 Ctrl+K 选择正确模型；端点必须用 /v1 而非 /api/chat。";
+			}
+			return english ? "Model returned an empty/invalid response. Model: " + cfg.chatModel + ". Run 'ollama list' to verify the model is installed. Make sure endpoint uses /v1 (not /api/chat)."
+					: "模型返回了空内容或无效响应。当前模型: " + cfg.chatModel + "。请运行 ollama list 确认模型已下载；端点必须用 /v1 而非 /api/chat。";
+		}
+		// HTTP 401
+		if (msg.contains("HTTP 401")) {
+			if (cfg.isLocalEndpoint()) {
+				return english ? "Local endpoint returned 401. If using Ollama, leave API key empty."
+						: "本地端点返回 401 认证错误，如果使用 Ollama 请将 API 密钥留空。";
+			}
+			return english ? "API key invalid or missing (HTTP 401). Press Ctrl+K to check your API key."
+					: "API 密钥无效或缺失（HTTP 401），请按 Ctrl+K 打开设置检查密钥。";
+		}
+		// HTTP 403
+		if (msg.contains("HTTP 403")) {
+			return english ? "Access denied (HTTP 403). Your API key may not have permission."
+					: "访问被拒绝（HTTP 403），API 密钥可能没有权限。";
+		}
+		// HTTP 404
+		if (msg.contains("HTTP 404")) {
+			return english ? "API endpoint not found (HTTP 404). For Ollama use: http://127.0.0.1:11434/v1"
+					: "API 端点不存在（HTTP 404），Ollama 用户请使用：http://127.0.0.1:11434/v1";
+		}
+		// HTTP 429
+		if (msg.contains("HTTP 429")) {
+			return english ? "Rate limited (HTTP 429). Too many requests, slow down."
+					: "请求过于频繁被限流（HTTP 429），请放慢操作速度。";
+		}
+		// HTTP 5xx
+		if (msg.contains("HTTP 5")) {
+			String code = msg.contains("Chat API") ? msg.substring(0, Math.min(80, msg.length())) : "Server error";
+			return english ? code + ". The API service may be temporarily unavailable."
+					: "服务器错误（" + msg.substring(0, Math.min(80, msg.length())) + "），API 服务可能暂时不可用。";
+		}
+		// STT/TTS errors
+		if (msg.startsWith("STT API error") || msg.startsWith("TTS API error")) {
+			return english ? "Voice API error: " + msg
+					: "语音 API 错误：" + msg;
+		}
+		// JSON parse error
+		if (e instanceof com.google.gson.JsonParseException) {
+			return english ? "Failed to parse model response. The model returned invalid format."
+					: "模型响应解析失败，模型返回了非标准格式。";
+		}
+		// Fallback: truncate raw message
+		String shortMsg = msg.length() > 200 ? msg.substring(0, 200) : msg;
+		return shortMsg;
+	}
+
+	// ---------- 入口：玩家用刷怪蛋右键生物 ----------
+
+	private static final Map<UUID, Long> LAST_SPAWN_EGG_REACT = new ConcurrentHashMap<>();
+
+	/**
+	 * 玩家手持刷怪蛋右键模组支持的生物时触发。
+	 * 同类刷怪蛋（如村民蛋右键村民）→ "你想复制我？"
+	 * 异类刷怪蛋（如牛蛋右键村民）→ "你想造什么？这跟我不是同类"
+	 * @param isSameType 刷怪蛋对应的实体类型是否与当前生物相同
+	 * @param eggEntityId 刷怪蛋对应的实体ID（如 "villager", "cow"）
+	 */
+	public static void onSpawnEggUsed(net.minecraft.world.entity.Mob mob, ServerPlayer player,
+									   boolean isSameType, String eggEntityId) {
+		if (!PersonaRegistry.supports(mob)) return;
+		java.util.UUID playerId = player.getUUID();
+		long now = System.currentTimeMillis();
+		Long last = LAST_SPAWN_EGG_REACT.get(mob.getUUID());
+		if (last != null && now - last < 5000) return; // 5秒冷却
+		LAST_SPAWN_EGG_REACT.put(mob.getUUID(), now);
+
+		boolean en = isEnglishUi(playerId);
+		String eggName = en ? eggEntityId.replace('_', ' ') : translateEggEntity(eggEntityId);
+		String prompt;
+		if (isSameType) {
+			// 同类刷怪蛋 → "你想复制我？"
+			prompt = en
+					? "(Player " + player.getGameProfile().name() + " is holding a " + eggName
+					+ " SPAWN EGG and used it on YOU! That's YOUR kind of spawn egg—they're trying to duplicate you! "
+					+ "React in character: surprised, suspicious, maybe flattered or creeped out? "
+					+ "Ask them what they're planning to do with a copy of you. Are they trying to replace you? Make an army of your kind?)"
+					: "（玩家" + player.getGameProfile().name() + "手里拿着" + eggName
+					+ "刷怪蛋，对你使用了！那是你同类的刷怪蛋——他想复制你！"
+					+ "以你的性格做出反应：惊讶、怀疑、可能觉得荣幸或者毛骨悚然？"
+					+ "问问他打算拿你的复制品做什么。他想替换你吗？还是想造一支你同类的军队？）";
+		} else {
+			// 异类刷怪蛋 → "你想造什么？这跟我不是同类"
+			prompt = en
+					? "(Player " + player.getGameProfile().name() + " is holding a " + eggName
+					+ " SPAWN EGG and used it on you. That's NOT your kind of spawn egg. "
+					+ "React in character: confused, curious, or maybe offended? "
+					+ "Ask them what they're trying to summon, and why they used it on you of all creatures. "
+					+ "Are they confused about what you are? Do they think you're something else?)"
+					: "（玩家" + player.getGameProfile().name() + "手里拿着" + eggName
+					+ "刷怪蛋，对你使用了。那不是你同类的刷怪蛋。"
+					+ "以你的性格做出反应：困惑、好奇、还是觉得被冒犯？"
+					+ "问问他到底想召唤什么，为什么偏偏用在你身上。"
+					+ "他是不是搞不清你是什么？还是把你当成别的东西了？）";
+		}
+
+		respond(player, mob, t(prompt, prompt, playerId), false);
+	}
+
+	/** 翻译刷怪蛋对应的实体名（中文） */
+	private static String translateEggEntity(String entityId) {
+		return switch (entityId) {
+			case "villager" -> "村民";
+			case "cow" -> "牛";
+			case "pig" -> "猪";
+			case "sheep" -> "羊";
+			case "chicken" -> "鸡";
+			case "horse" -> "马";
+			case "donkey" -> "驴";
+			case "mule" -> "骡";
+			case "mooshroom" -> "哞菇";
+			case "rabbit" -> "兔子";
+			case "fox" -> "狐狸";
+			case "wolf" -> "狼";
+			case "cat" -> "猫";
+			case "ocelot" -> "豹猫";
+			case "parrot" -> "鹦鹉";
+			case "turtle" -> "海龟";
+			case "axolotl" -> "美西螈";
+			case "bee" -> "蜜蜂";
+			case "goat" -> "山羊";
+			case "frog" -> "青蛙";
+			case "allay" -> "悦灵";
+			case "zombie" -> "僵尸";
+			case "skeleton" -> "骷髅";
+			case "creeper" -> "苦力怕";
+			case "spider" -> "蜘蛛";
+			case "cave_spider" -> "洞穴蜘蛛";
+			case "enderman" -> "末影人";
+			case "endermite" -> "末影螨";
+			case "slime" -> "史莱姆";
+			case "magma_cube" -> "岩浆怪";
+			case "ghast" -> "恶魂";
+			case "blaze" -> "烈焰人";
+			case "zombie_villager" -> "僵尸村民";
+			case "zombified_piglin" -> "僵尸猪灵";
+			case "piglin" -> "猪灵";
+			case "piglin_brute" -> "猪灵蛮兵";
+			case "hoglin" -> "疣猪兽";
+			case "zoglin" -> "僵尸疣猪兽";
+			case "phantom" -> "幻翼";
+			case "drowned" -> "溺尸";
+			case "husk" -> "尸壳";
+			case "stray" -> "流浪者";
+			case "wither_skeleton" -> "凋灵骷髅";
+			case "pillager" -> "掠夺者";
+			case "vindicator" -> "卫道士";
+			case "evoker" -> "唤魔者";
+			case "illusioner" -> "幻术师";
+			case "witch" -> "女巫";
+			case "ravager" -> "劫掠兽";
+			case "iron_golem" -> "铁傀儡";
+			case "snow_golem" -> "雪傀儡";
+			case "warden" -> "监守者";
+			case "ender_dragon" -> "末影龙";
+			case "wither" -> "凋灵";
+			case "strider" -> "炽足兽";
+			case "shulker" -> "潜影贝";
+			case "silverfish" -> "蠹虫";
+			case "guardian" -> "守卫者";
+			case "elder_guardian" -> "远古守卫者";
+			case "breeze" -> "旋风";
+			case "bogged" -> "沼骸";
+			case "skeleton_horse" -> "骷髅马";
+			case "zombie_horse" -> "僵尸马";
+			case "happy_ghast" -> "快乐恶魂";
+			case "parched" -> "焦干兽";
+			default -> entityId.replace('_', ' ');
+		};
+	}
+
+	// ---------- 入口：玩家用拴绳拴住生物 ----------
+
+	private static final Map<UUID, Long> LAST_LEASH_REACT = new ConcurrentHashMap<>();
+
+	/**
+	 * 玩家用拴绳右键试图拴住一个生物时触发。
+	 * 友好生物（村民、铁傀儡、猫等）会愤怒/抗议；敌对生物无视。
+	 */
+	public static void onPlayerLeashMob(Mob mob, ServerPlayer player) {
+		if (!PersonaRegistry.supports(mob)) return;
+		UUID playerId = player.getUUID();
+		long now = System.currentTimeMillis();
+		Long last = LAST_LEASH_REACT.get(mob.getUUID());
+		if (last != null && now - last < 10000) return; // 10秒冷却
+		LAST_LEASH_REACT.put(mob.getUUID(), now);
+
+		// 好感度大幅降低（拴住 = 束缚/不尊重）
+		MobMindState.adjustFriendship(mob, playerId, -10);
+
+		boolean en = isEnglishUi(playerId);
+		String mobName = en ? mob.getType().getDescription().getString() : translateMobName(mob.getClass().getSimpleName());
+		boolean isIronGolem = mob.getClass().getSimpleName().equals("IronGolem");
+		boolean isVillager = mob instanceof net.minecraft.world.entity.npc.villager.Villager;
+		String entityId = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(mob.getType()).getPath();
+		boolean isHappyGhast = entityId.equals("happy_ghast");
+
+		String prompt;
+		if (isIronGolem) {
+			prompt = en
+					? "(Player " + player.getGameProfile().name() + " is trying to put a LEAD on you, an Iron Golem! You are a proud guardian of the village—you CANNOT be leashed like an animal! You feel deeply insulted. Roar angrily, swat the lead away, and warn the player never to do that again. You might attack if they persist.)"
+					: "（玩家" + player.getGameProfile().name() + "试图用拴绳拴住你——一个铁傀儡！你是村庄的骄傲守护者，绝不能像牲畜一样被拴住！你感到极大的侮辱。怒吼，挥开绳子，警告玩家永远不要再这样做。如果他们继续你可能会攻击。）";
+		} else if (isVillager) {
+			prompt = en
+					? "(Player " + player.getGameProfile().name() + " is trying to put a LEAD on you, a Villager! How dare they treat you like an animal?! You are a free person! Protest loudly, tell them to unhand you immediately, threaten to call the Iron Golem.)"
+					: "（玩家" + player.getGameProfile().name() + "试图用拴绳拴住你——一个村民！他们竟敢把你当牲畜对待？！你是自由的人！大声抗议，叫他们立刻放开你，威胁说要叫铁傀儡来。）";
+		} else if (isHappyGhast) {
+			prompt = en
+					? "(Player " + player.getGameProfile().name() + " is trying to put a LEAD on you, a Happy Ghast! You are a gentle giant of the Nether skies—you float freely through the air! Being tethered to the ground feels WRONG. You are far too large and dignified to be dragged around on a rope! Express your displeasure—maybe a sad whimper, or indignant huffing. You might tolerate it for someone you truly trust, but you really don't enjoy it.)"
+					: "（玩家" + player.getGameProfile().name() + "试图用拴绳拴住你——一只快乐恶魂！你是下界天空的温柔巨兽——你在空中自由漂浮！被拴在地上感觉太不对了。你这么巨大、这么有尊严，怎能被一根绳子拖着走！表达你的不满——也许悲伤地呜咽，或愤愤地喷气。如果你真的信任那个人也许会勉强忍受，但你真的很不喜欢这样。）";
+		} else {
+			// 其他友好生物（猫、狼、马等可驯服生物在MC中本来就可以被拴，所以友好/中立生物的抗议程度较轻）
+			prompt = en
+					? "(Player " + player.getGameProfile().name() + " just attached a lead to you. You don't like being tethered—complain or react in character. If you're friendly to them you might tolerate it reluctantly; if not, express annoyance.)"
+					: "（玩家" + player.getGameProfile().name() + "用拴绳拴住了你。你不喜欢被拴住——以你的性格做出反应。如果你和他关系好可能勉强忍受，否则表达不满。）";
+		}
+
+		// 铁傀儡/村民被拴住时激怒
+		if (isIronGolem || isVillager) {
+			long gameTime = mob.level().getLevelData().getGameTime();
+			MobMindState.provoke(mob, playerId, gameTime + 3000); // 激怒25秒
+			if (mob.getTarget() == null && isIronGolem) mob.setTarget(player);
+		}
+
+		respond(player, mob, t(prompt, prompt, playerId), false);
+		MobMindState.recordGrudge(mob, playerId, "用拴绳拴住我",
+				mob.level().getGameTime() + 12000);
+	}
+
+	// ---------- 入口：拴绳被解开（右键生物 / 破坏栅栏 / 距离断裂） ----------
+
+	/** 记录当前被拴住的模组支持生物（用于检测拴绳被解开） */
+	private static final java.util.Set<UUID> TRACKED_LEASHED = ConcurrentHashMap.newKeySet();
+	/** 记录拴绳持有者（mob UUID → holder UUID） */
+	private static final Map<UUID, UUID> LEASH_HOLDER = new ConcurrentHashMap<>();
+	/** 拴绳被解开时的反应冷却（key 为生物 UUID） */
+	private static final Map<UUID, Long> LAST_UNLEASH_REACT = new ConcurrentHashMap<>();
+
+	/**
+	 * 定时检测被拴生物是否被解开。只检测"从被拴变成不被拴"的真正解开事件。
+	 * 不再检测持有者变化（栅栏结→玩家），因为那是"转移"而非"解开"，
+	 * 会导致仍然被拴的生物误触发"我自由了！"反应。
+	 */
+	public static void checkUnleashEvents(MinecraftServer server) {
+		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			if (!player.isAlive() || player.isSpectator()) continue;
+			ServerLevel level = (ServerLevel) player.level();
+			AABB box = player.getBoundingBox().inflate(16.0);
+			List<Mob> mobs = level.getEntitiesOfClass(Mob.class, box,
+					m -> m.isAlive() && PersonaRegistry.supports(m));
+			for (Mob mob : mobs) {
+				UUID mobId = mob.getUUID();
+				boolean leashed = mob.isLeashed();
+				boolean wasTracked = TRACKED_LEASHED.contains(mobId);
+
+				if (leashed) {
+					TRACKED_LEASHED.add(mobId);
+				} else if (wasTracked) {
+					TRACKED_LEASHED.remove(mobId);
+					LEASH_HOLDER.remove(mobId);
+					onMobUnleashed(mob, player);
+				}
+			}
+		}
+	}
+
+	/** 拴绳被解开 → 生物表达重获自由的反应（好感度+3，冷却8秒/生物） */
+	private static void onMobUnleashed(Mob mob, ServerPlayer player) {
+		// 安全检查：如果生物仍然被拴住（不应发生，但防止状态不同步导致误触发），直接返回
+		if (mob.isLeashed()) return;
+		UUID playerId = player.getUUID();
+		long now = System.currentTimeMillis();
+		Long last = LAST_UNLEASH_REACT.get(mob.getUUID());
+		if (last != null && now - last < 8000) return; // 8秒冷却
+		LAST_UNLEASH_REACT.put(mob.getUUID(), now);
+
+		// 解开拴绳 = 解脱，好感度小幅回升
+		MobMindState.adjustFriendship(mob, playerId, 3);
+
+		boolean en = isEnglishUi(playerId);
+		boolean isIronGolem = mob.getClass().getSimpleName().equals("IronGolem");
+		boolean isVillager = mob instanceof net.minecraft.world.entity.npc.villager.Villager;
+		String entityId = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(mob.getType()).getPath();
+		boolean isHappyGhast = entityId.equals("happy_ghast");
+		String playerName = player.getGameProfile().name();
+
+		String prompt;
+		if (isIronGolem) {
+			prompt = en
+					? "(Player " + playerName + " just removed the lead from you, an Iron Golem. The insult is over—you stand tall again, free and unbound. Express relief and dignity restored; maybe give a short rumbling acknowledgment, or warn them never to do that again.)"
+					: "（玩家" + playerName + "刚刚解开了你——一个铁傀儡——身上的拴绳。侮辱终于结束，你重新挺直身躯，自由了。表达解脱和尊严回归——也许低沉地哼一声表示知晓，或警告他以后别再这样。）";
+		} else if (isVillager) {
+			prompt = en
+					? "(Player " + playerName + " just unleashed you, a Villager. You're free again! Express relief—maybe smooth out your clothes, grumble about the indignity, or thank them (grudgingly or sincerely depending on your friendship).)"
+					: "（玩家" + playerName + "刚刚解开了你——一个村民——的拴绳。你自由了！表达解脱——也许整理一下衣服、抱怨刚才的屈辱，或者谢谢他（根据好感度，勉强或真诚地）。）";
+		} else if (isHappyGhast) {
+			prompt = en
+					? "(Player " + playerName + " just removed the lead from you, a Happy Ghast. The tether is gone—you can float free in the skies again! Express joy and relief—maybe a happy hum, or rise up gleefully. If you trust the player you might forgive them quickly.)"
+					: "（玩家" + playerName + "解开了你——一只快乐恶魂——的拴绳。束缚消失了，你可以再次在天空中自由漂浮！表达开心和解脱——也许快乐地哼鸣，或兴奋地升上去。如果你信任那个玩家也许会很快原谅他。）";
+		} else {
+			prompt = en
+					? "(Player " + playerName + " just removed your lead. You're free again! React in character—relief, thanks, or a stretch now that you can move freely. If you're friendly with them you might be grateful; otherwise just glad it's over.)"
+					: "（玩家" + playerName + "刚刚解开了你的拴绳。你自由了！用符合你性格的方式反应——解脱、感谢、或伸个懒腰。如果你和他关系好可能会感激，否则就是庆幸终于结束了。）";
+		}
+
+		respond(player, mob, t(prompt, prompt, playerId), false);
+	}
+
+	// ---------- 入口：马鞍/马铠被移除 ----------
+
+	/** 记录当前有鞍的模组支持生物（用于检测马鞍被移除） */
+	private static final java.util.Set<UUID> TRACKED_SADDLED = ConcurrentHashMap.newKeySet();
+	/** 记录生物的马铠（mob UUID → 马铠物品ID，空字符串=无马铠） */
+	private static final Map<UUID, String> TRACKED_ARMOR = new ConcurrentHashMap<>();
+	/** 马鞍被移除时的反应冷却（key 为生物 UUID） */
+	private static final Map<UUID, Long> LAST_UNSADDLE_REACT = new ConcurrentHashMap<>();
+
+	/**
+	 * 定时检测有鞍生物是否被移除了马鞍，以及马铠是否被更换/移除。
+	 */
+	public static void checkSaddleRemoved(MinecraftServer server) {
+		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			if (!player.isAlive() || player.isSpectator()) continue;
+			ServerLevel level = (ServerLevel) player.level();
+			AABB box = player.getBoundingBox().inflate(16.0);
+			List<Mob> mobs = level.getEntitiesOfClass(Mob.class, box,
+					m -> m.isAlive() && PersonaRegistry.supports(m));
+			for (Mob mob : mobs) {
+				UUID mobId = mob.getUUID();
+				// 马鞍检测
+				boolean saddled = mob.isSaddled();
+				boolean wasTracked = TRACKED_SADDLED.contains(mobId);
+				if (saddled) {
+					TRACKED_SADDLED.add(mobId);
+				} else if (wasTracked) {
+					TRACKED_SADDLED.remove(mobId);
+					onSaddleRemoved(mob, player);
+				}
+				// 马铠检测：通过 Mob.getBodyArmorItem() 检查
+				net.minecraft.world.item.ItemStack bodyArmor = mob.getBodyArmorItem();
+				String armorId = bodyArmor.isEmpty() ? "" :
+						net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(bodyArmor.getItem()).getPath();
+				String prevArmor = TRACKED_ARMOR.get(mobId);
+				if (prevArmor == null) prevArmor = "";
+				if (!armorId.equals(prevArmor)) {
+					TRACKED_ARMOR.put(mobId, armorId);
+					if (!prevArmor.isEmpty() || !armorId.isEmpty()) {
+						// 马铠被更换或移除/添加
+						onHorseArmorChanged(mob, player, prevArmor, armorId);
+					}
+				}
+			}
+		}
+	}
+
+	/** 马铠被更换/添加/移除 → 生物反应 */
+	private static void onHorseArmorChanged(Mob mob, ServerPlayer player, String oldArmor, String newArmor) {
+		UUID playerId = player.getUUID();
+		long now = System.currentTimeMillis();
+		Long last = LAST_UNSADDLE_REACT.get(mob.getUUID());
+		if (last != null && now - last < 3000) return;
+		LAST_UNSADDLE_REACT.put(mob.getUUID(), now);
+
+		boolean en = isEnglishUi(playerId);
+		String playerName = player.getGameProfile().name();
+		String prompt;
+		if (!newArmor.isEmpty() && oldArmor.isEmpty()) {
+			// 穿上马铠
+			prompt = en
+					? "(Player " + playerName + " just put " + newArmor + " on you as armor! It feels protective—maybe a bit heavy. "
+					+ "React in character: stand taller, feel safer, or comment on the weight. One short line.)"
+					: "（玩家" + playerName + "给你穿上了" + newArmor + "当马铠！感觉很有保护感——也许有点沉。"
+					+ "用符合你性格的方式反应：挺起胸膛、感觉更安全、或者嘟囔有点重。只说一句短话。）";
+		} else if (newArmor.isEmpty() && !oldArmor.isEmpty()) {
+			// 取下马铠
+			prompt = en
+					? "(Player " + playerName + " just took off your " + oldArmor + " armor! You feel lighter and more exposed. "
+					+ "React in character: relief at the weight gone, or vulnerability without protection. One short line.)"
+					: "（玩家" + playerName + "把你的" + oldArmor + "马铠取下来了！你感觉轻了但也少了层保护。"
+					+ "用符合你性格的方式反应：解脱了重量、或者不安没了保护。只说一句短话。）";
+		} else {
+			// 更换马铠
+			prompt = en
+					? "(Player " + playerName + " swapped your armor from " + oldArmor + " to " + newArmor + "! "
+					+ "React in character to the change. One short line.)"
+					: "（玩家" + playerName + "把你的马铠从" + oldArmor + "换成了" + newArmor + "！"
+					+ "用符合你性格的方式反应这次更换。只说一句短话。）";
+		}
+		respond(player, mob, t(prompt, prompt, playerId), false);
+	}
+
+	/** 马鞍被移除 → 生物反应（8秒冷却） */
+	private static void onSaddleRemoved(Mob mob, ServerPlayer player) {
+		UUID playerId = player.getUUID();
+		long now = System.currentTimeMillis();
+		Long last = LAST_UNSADDLE_REACT.get(mob.getUUID());
+		if (last != null && now - last < 8000) return;
+		LAST_UNSADDLE_REACT.put(mob.getUUID(), now);
+
+		boolean en = isEnglishUi(playerId);
+		String playerName = player.getGameProfile().name();
+		String prompt = en
+				? "(Player " + playerName + " just took the saddle off you! You feel lighter without it—free again. "
+				+ "React in character: relief, a stretch, maybe a little sad to lose the rider, or glad to be unburdened. One short line.)"
+				: "（玩家" + playerName + "刚刚把你的马鞍取下来了！没了马鞍你感觉轻了不少——又自由了。"
+				+ "用符合你性格的方式反应：解脱、伸个懒腰、也许有点舍不得失去骑手，或者很高兴不用再驮人了。只说一句短话。）";
+		respond(player, mob, t(prompt, prompt, playerId), false);
+	}
+
+	// ---------- 入口：玩家在村庄吸引/拴走被动动物 → 村民质问 ----------
+
+	/** 判断是否为被动动物（羊/牛/猪/鸡/兔/马等无AI动物） */
+	private static boolean isPassiveLivestock(Mob mob) {
+		String entityId = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(mob.getType()).getPath();
+		return LIVESTOCK_TEMPT_ITEMS.containsKey(entityId);
+	}
+
+	/** 检查动物是否正被敌对怪物骑乘（鸡骑士的鸡、小僵尸骑的鸡等） */
+	private static boolean isMountedByHostileMonster(net.minecraft.world.entity.Entity entity) {
+		for (var passenger : entity.getPassengers()) {
+			// 任何敌对怪物（Monster子类：僵尸、骷髅、苦力怕、蜘蛛、女巫、尸壳、溺尸等）骑在上面都不算村民的牲畜
+			if (passenger instanceof net.minecraft.world.entity.monster.Monster) {
+				return true;
+			}
+			// 递归检查——怪物骑怪物骑动物（极端情况）
+			if (isMountedByHostileMonster(passenger)) return true;
+		}
+		return false;
+	}
+
+	/** 玩家用拴绳拴住被动动物/宠物（羊/猪/牛/猫等）→ 附近村民来质问（30秒冷却/玩家） */
+	public static void onPlayerLeashPassiveAnimal(Mob animal, ServerPlayer player) {
+		// 被敌对怪物骑乘的动物（鸡骑士的鸡等）不是村民的牲畜，不触发
+		if (isMountedByHostileMonster(animal)) return;
+		// 流浪商人的羊驼被拴 → 商人来质问
+		String animalId = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(animal.getType()).getPath();
+		if (animalId.equals("trader_llama")) {
+			onTraderLlamaLeashed(animal, player);
+			return;
+		}
+		// 女巫的猫被拴 → 女巫来阻止（沼泽小屋附近的黑猫是女巫的伙伴）
+		if (animalId.equals("cat")) {
+			if (onWitchCatLeashed(animal, player)) return;
+		}
+		if (!isPassiveLivestock(animal)) return;
+		if (!isInVillage((ServerLevel) player.level(), player.blockPosition())) return;
+		java.util.UUID playerId = player.getUUID();
+		long now = System.currentTimeMillis();
+		Long last = LAST_LIVESTOCK_LEAD_REACT.get(playerId);
+		if (last != null && now - last < 30000) return;
+		LAST_LIVESTOCK_LEAD_REACT.put(playerId, now);
+
+		ServerLevel level = (ServerLevel) player.level();
+		AABB box = player.getBoundingBox().inflate(16.0);
+		List<Villager> villagers = level.getEntitiesOfClass(Villager.class, box,
+				v -> v.isAlive() && PersonaRegistry.supports(v) && withinTalkRange(v, player));
+		if (villagers.isEmpty()) return;
+
+		// 优先找猫/宠物的主人（如果有owner且是附近村民）
+		Villager ownerVillager = null;
+		boolean isPet = isVillagePet(animalId);
+		try {
+			if (animal instanceof net.minecraft.world.entity.TamableAnimal tamable && tamable.isTame()) {
+				Entity owner = tamable.getOwner();
+				if (owner instanceof Villager v) {
+					for (Villager nearby : villagers) {
+						if (nearby.getUUID().equals(v.getUUID())) {
+							ownerVillager = v;
+							break;
+						}
+					}
+				}
+			}
+		} catch (Exception ignored) {}
+
+		Villager villager = ownerVillager != null ? ownerVillager : villagers.get(player.getRandom().nextInt(villagers.size()));
+		String animalName = animal.getType().getDescription().getString();
+		boolean en = isEnglishUi(playerId);
+
+		String prompt;
+		if (isPet) {
+			// 宠物（猫/狼/鹦鹉）被拴 → 更着急的语气
+			prompt = en
+					? "(Player " + player.getGameProfile().name() + " is putting a LEAD on your pet " + animalName
+					+ " (or a village pet)! You are upset—pets aren't livestock to be led away! Confront the player, "
+					+ "demand they let go immediately, sound worried or angry. That's someone's companion! One short line.)"
+					: "（玩家" + player.getGameProfile().name() + "竟然用拴绳拴你的宠物" + animalName
+					+ "（或村里的宠物）！你很生气——宠物不是可以随便牵走的牲畜！"
+					+ "冲过去质问他，要他立刻放开，语气着急或愤怒。那是大家的伙伴啊！只说一句短话。）";
+		} else {
+			// 牲畜被拴
+			prompt = en
+					? "(Player " + player.getGameProfile().name() + " is putting a lead on a " + animalName
+					+ " from the village! You notice this—confront the player and ask what they're doing. "
+					+ "Are they stealing village livestock? Warn them or demand an explanation. One short line.)"
+					: "（玩家" + player.getGameProfile().name() + "正在用拴绳拴村庄里的" + animalName
+					+ "！你注意到了——走过去质问玩家要干嘛。他是不是想偷村里的牲畜？警告他或要个说法。只说一句短话。）";
+		}
+		respond(player, villager, prompt, false);
+	}
+
+	/** 玩家拴走流浪商人的羊驼 → 商人来质问（30秒冷却/玩家） */
+	private static void onTraderLlamaLeashed(Mob llama, ServerPlayer player) {
+		java.util.UUID playerId = player.getUUID();
+		long now = System.currentTimeMillis();
+		Long last = LAST_LIVESTOCK_LEAD_REACT.get(playerId);
+		if (last != null && now - last < 30000) return;
+		LAST_LIVESTOCK_LEAD_REACT.put(playerId, now);
+
+		ServerLevel level = (ServerLevel) player.level();
+		// 找附近16格内的流浪商人（用 AbstractVillager 过滤 + 实体ID确认）
+		AABB box = llama.getBoundingBox().inflate(16.0);
+		List<net.minecraft.world.entity.npc.villager.AbstractVillager> traders = level.getEntitiesOfClass(
+				net.minecraft.world.entity.npc.villager.AbstractVillager.class, box, Entity::isAlive);
+		net.minecraft.world.entity.npc.villager.AbstractVillager trader = null;
+		for (var v : traders) {
+			String eid = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(v.getType()).getPath();
+			if (eid.equals("wandering_trader") && PersonaRegistry.supports(v)) {
+				trader = v;
+				break;
+			}
+		}
+		if (trader == null) return;
+
+		boolean en = isEnglishUi(playerId);
+		respond(player, trader, en
+				? "(Player " + player.getGameProfile().name() + " just put a LEAD on one of your pack llamas! "
+				+ "You are a wandering trader and those llamas carry your goods. Confront the player—demand they let go, "
+				+ "threaten to raise your prices, or call them a thief. One short angry line.)"
+				: "（玩家" + player.getGameProfile().name() + "竟然用拴绳拴走了你的驮羊驼！"
+				+ "你是流浪商人，那些羊驼驮着你的货物。冲过去质问他——要他放手，"
+				+ "威胁要涨价，或者骂他是小偷。只说一句愤怒的短话。）", false);
+	}
+
+	/**
+	 * 玩家拴住猫 → 找附近16格内的女巫来阻止（沼泽小屋的黑猫是女巫的伙伴）。
+	 * @return true=已处理（附近有女巫并已触发）；false=附近没女巫，继续走村民质问逻辑
+	 */
+	private static boolean onWitchCatLeashed(Mob cat, ServerPlayer player) {
+		java.util.UUID playerId = player.getUUID();
+		long now = System.currentTimeMillis();
+		Long last = LAST_LIVESTOCK_LEAD_REACT.get(playerId);
+		if (last != null && now - last < 30000) return true; // 冷却中，拦截但不重复触发
+
+		ServerLevel level = (ServerLevel) player.level();
+		// 找附近16格内的女巫
+		AABB box = cat.getBoundingBox().inflate(16.0);
+		List<net.minecraft.world.entity.monster.Witch> witches = level.getEntitiesOfClass(
+				net.minecraft.world.entity.monster.Witch.class, box, Entity::isAlive);
+		// 找最近的、支持AI的女巫
+		net.minecraft.world.entity.monster.Witch witch = null;
+		double closestDist = Double.MAX_VALUE;
+		for (var w : witches) {
+			if (!PersonaRegistry.supports(w)) continue;
+			double d = cat.distanceToSqr(w);
+			if (d < closestDist) {
+				closestDist = d;
+				witch = w;
+			}
+		}
+		if (witch == null) return false; // 附近没有女巫，交给村民质问逻辑处理
+
+		LAST_LIVESTOCK_LEAD_REACT.put(playerId, now);
+		MobMindState.adjustFriendship(witch, playerId, -8); // 拴猫大幅降低好感度
+		boolean en = isEnglishUi(playerId);
+		respond(player, witch, en
+				? "(Player " + player.getGameProfile().name() + " just put a LEAD on your black cat! That's your familiar, your companion—they have NO right to leash her! "
+				+ "You're furious! Rush over cackling, throw a splash potion at their feet if you're evil, or demand angrily that they let your cat go immediately. "
+				+ "Threaten them with curses or bad luck. One short angry line, in your witchy style.)"
+				: "（玩家" + player.getGameProfile().name() + "竟然用拴绳拴住了你的黑猫！那是你的魔宠、你的伙伴——他们根本没权利拴她！"
+				+ "你怒不可遏！狂笑着冲过去，邪恶的就往他脚边扔一瓶喷溅药水，愤怒地叫他立刻放开你的猫。"
+				+ "诅咒他、威胁他会走霉运。用你女巫的风格说一句愤怒的短话。）", false);
+		return true;
+	}
+
+	/** 玩家骑上流浪商人的驮羊驼 → 商人来质问（30秒冷却/玩家，与拴羊驼共用） */
+	private static void onTraderLlamaRidden(Mob llama, ServerPlayer player) {
+		java.util.UUID playerId = player.getUUID();
+		long now = System.currentTimeMillis();
+		Long last = LAST_LIVESTOCK_LEAD_REACT.get(playerId);
+		if (last != null && now - last < 30000) return;
+
+		ServerLevel level = (ServerLevel) player.level();
+		AABB box = llama.getBoundingBox().inflate(16.0);
+		List<net.minecraft.world.entity.npc.villager.AbstractVillager> traders = level.getEntitiesOfClass(
+				net.minecraft.world.entity.npc.villager.AbstractVillager.class, box, Entity::isAlive);
+		net.minecraft.world.entity.npc.villager.AbstractVillager trader = null;
+		for (var v : traders) {
+			String eid = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(v.getType()).getPath();
+			if (eid.equals("wandering_trader") && PersonaRegistry.supports(v)) {
+				trader = v;
+				break;
+			}
+		}
+		if (trader == null) return;
+
+		LAST_LIVESTOCK_LEAD_REACT.put(playerId, now);
+		boolean en = isEnglishUi(playerId);
+		respond(player, trader, en
+				? "(Player " + player.getGameProfile().name() + " just climbed onto one of your pack llamas and is RIDING it! "
+				+ "You are a wandering trader—those llamas carry your goods, they are NOT mounts for strangers! "
+				+ "Confront the player: demand they get off immediately, scold them for treating your livestock like a ride, "
+				+ "or threaten to raise your prices. One short angry line.)"
+				: "（玩家" + player.getGameProfile().name() + "竟然爬上你的驮羊驼骑着它走！"
+				+ "你是流浪商人——那些羊驼驮着你的货物，不是给陌生人骑的坐骑！"
+				+ "冲过去质问他：要他立刻下来，骂他把你的牲口当坐骑，"
+				+ "或者威胁要涨价。只说一句愤怒的短话。）", false);
+	}
+
+	/**
+	 * 玩家用拴绳右键自己拴住的 trader_llama → 把羊驼还给流浪商人：
+	 * 解开拴绳、羊驼传送到商人身边、商人道谢。
+	 * @return true=已处理（附近有商人，拦截右键）；false=附近没商人，交给原版解拴
+	 */
+	public static boolean onTraderLlamaReturned(Mob llama, ServerPlayer player) {
+		ServerLevel level = (ServerLevel) player.level();
+		// 找附近16格内的流浪商人（用 AbstractVillager 过滤 + 实体ID确认）
+		AABB box = llama.getBoundingBox().inflate(16.0);
+		List<net.minecraft.world.entity.npc.villager.AbstractVillager> traders = level.getEntitiesOfClass(
+				net.minecraft.world.entity.npc.villager.AbstractVillager.class, box, Entity::isAlive);
+		net.minecraft.world.entity.npc.villager.AbstractVillager trader = null;
+		for (var v : traders) {
+			String eid = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(v.getType()).getPath();
+			if (eid.equals("wandering_trader") && PersonaRegistry.supports(v)) {
+				trader = v;
+				break;
+			}
+		}
+		if (trader == null) return false; // 附近没商人，交给原版解拴
+
+		// 把羊驼传送到商人身边
+		net.minecraft.world.phys.Vec3 tp = trader.position();
+		llama.teleportTo(tp.x + (llama.getRandom().nextDouble() - 0.5) * 3.0,
+				tp.y, tp.z + (llama.getRandom().nextDouble() - 0.5) * 3.0);
+
+		// 商人拴住羊驼（直接转移拴绳持有者：玩家→商人；不 dropLeash 避免清除时序冲突导致拴绳不显示）
+		llama.setLeashedTo(trader, true);
+
+		// 返还玩家1个拴绳物品（之前拴羊驼消耗的；创造模式不返还）
+		if (!player.isCreative()) {
+			player.getInventory().placeItemBackInInventory(
+					new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.LEAD));
+		}
+
+		// 商人道谢
+		boolean en = isEnglishUi(player.getUUID());
+		respond(player, trader, en
+				? "(Player " + player.getGameProfile().name() + " just brought your pack llama back! "
+				+ "Thank them—relief and gratitude. One short line.)"
+				: "（玩家" + player.getGameProfile().name() + "把你的驮羊驼送回来了！"
+				+ "道个谢——松口气、感谢他。只说一句短话。）", false);
+		return true;
+	}
+
+	/** 玩家手持吸引物品在村庄内吸引被动动物/宠物 → 村民来质问（30秒冷却/玩家） */
+	public static void tryLivestockTemptInVillage(MinecraftServer server) {
+		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			if (!player.isAlive() || player.isSpectator() || player.isCreative()) continue;
+			var stack = player.getMainHandItem();
+			if (stack.isEmpty()) continue;
+			java.util.UUID playerId = player.getUUID();
+			long now = System.currentTimeMillis();
+			Long last = LAST_LIVESTOCK_LEAD_REACT.get(playerId);
+			if (last != null && now - last < 30000) continue;
+
+			ServerLevel level = (ServerLevel) player.level();
+
+			// 找附近8格内被该物品吸引的被动动物
+			AABB box = player.getBoundingBox().inflate(8.0);
+			List<Mob> animals = level.getEntitiesOfClass(Mob.class, box, m -> {
+				if (!m.isAlive()) return false;
+				String eid = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(m.getType()).getPath();
+				var temptSet = LIVESTOCK_TEMPT_ITEMS.get(eid);
+				return temptSet != null && temptSet.contains(stack.getItem());
+			});
+			if (animals.isEmpty()) continue;
+
+			// 优先判断是否引走的是宠物（猫/狼/鹦鹉）
+			Mob targetAnimal = animals.get(0);
+			String animalId = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(targetAnimal.getType()).getPath();
+			boolean isPet = isVillagePet(animalId);
+
+			// 找附近16格内的村民来质问
+			AABB villageBox = player.getBoundingBox().inflate(16.0);
+			List<Villager> villagers = level.getEntitiesOfClass(Villager.class, villageBox,
+					v -> v.isAlive() && PersonaRegistry.supports(v) && withinTalkRange(v, player));
+			if (villagers.isEmpty()) continue;
+
+			// 村庄检测：结构检测优先；失败时若附近有2+村民则视为村庄场景（fallback，应对结构检测在部分存档/边缘失效）
+			boolean inVillage = isInVillage(level, player.blockPosition());
+			if (!inVillage && villagers.size() < 2) continue;
+
+			// 优先找宠物的主人
+			Villager ownerVillager = null;
+			try {
+				if (isPet && targetAnimal instanceof net.minecraft.world.entity.TamableAnimal tamable && tamable.isTame()) {
+					Entity owner = tamable.getOwner();
+					if (owner instanceof Villager v) {
+						for (Villager nearby : villagers) {
+							if (nearby.getUUID().equals(v.getUUID())) {
+								ownerVillager = v;
+								break;
+							}
+						}
+					}
+				}
+			} catch (Exception ignored) {}
+
+			LAST_LIVESTOCK_LEAD_REACT.put(playerId, now);
+			Villager villager = ownerVillager != null ? ownerVillager : villagers.get(player.getRandom().nextInt(villagers.size()));
+			String animalName = targetAnimal.getType().getDescription().getString();
+			String itemName = stack.getHoverName().getString();
+			boolean en = isEnglishUi(playerId);
+
+			String prompt;
+			if (isPet) {
+				// 引走宠物 → 更着急
+				prompt = en
+						? "(Player " + player.getGameProfile().name() + " is holding " + itemName
+						+ " and luring your pet " + animalName + " (or a village pet) away! You are alarmed—"
+						+ "pets aren't something to lure off! Confront the player, tell them to stop, that cat/dog/parrot belongs here. One short worried line.)"
+						: "（玩家" + player.getGameProfile().name() + "手上拿着" + itemName
+						+ "，正在把你的宠物" + animalName + "（或村里的宠物）引走！你很紧张——"
+						+ "宠物不是可以随便诱拐的！过去喝止他，叫他别这样，那猫/狗/鹦鹉是这里的一员。只说一句着急的短话。）";
+			} else {
+				// 引走牲畜
+				prompt = en
+						? "(Player " + player.getGameProfile().name() + " is holding " + itemName
+						+ " and luring a " + animalName + " from the village! You notice this—walk over and ask "
+						+ "what they're doing. Are they trying to steal village livestock? One short line.)"
+						: "（玩家" + player.getGameProfile().name() + "手上拿着" + itemName
+						+ "，正在把村庄里的" + animalName + "引走！你注意到了——走过去问他在干什么。"
+						+ "他是不是想偷村里的牲畜？只说一句短话。）";
+			}
+			respond(player, villager, prompt, false);
+			if (!inVillage) {
+				MobMindMod.LOGGER.info("[MobMind] Livestock tempt via villager fallback (structure detection failed, {} villagers nearby) player={}",
+						villagers.size(), player.getGameProfile().name());
+			}
+			return; // 每轮最多一个玩家触发
+		}
+	}
+
+	/** 将Minecraft类名翻译成中文 */
+	private static String translateMobName(String className) {
+		return switch (className) {
+			case "Zombie", "ZombieVillager" -> "僵尸";
+			case "Skeleton" -> "骷髅";
+			case "Creeper" -> "苦力怕";
+			case "Spider" -> "蜘蛛";
+			case "CaveSpider" -> "洞穴蜘蛛";
+			case "ZombifiedPiglin" -> "僵尸猪灵";
+			case "Piglin", "PiglinBrute" -> "猪灵";
+			case "Blaze" -> "烈焰人";
+			case "Ghast" -> "恶魂";
+			case "WitherSkeleton" -> "凋灵骷髅";
+			case "Husk" -> "尸壳";
+			case "Stray" -> "流浪者";
+			case "Drowned" -> "溺尸";
+			case "Witch" -> "女巫";
+			case "Vindicator" -> "卫道士";
+			case "Evoker" -> "唤魔者";
+			case "Ravager" -> "劫掠兽";
+			case "Pillager" -> "掠夺者";
+			case "Illusioner" -> "幻术师";
+			case "Enderman" -> "末影人";
+			case "IronGolem" -> "铁傀儡";
+			case "Villager" -> "村民";
+			case "WanderingTrader" -> "流浪商人";
+			case "Wolf" -> "狼";
+			case "Cat" -> "猫";
+			case "Fox" -> "狐狸";
+			// 牲畜（支持类名和 entity ID 两种格式）
+			case "Cow", "cow" -> "牛";
+			case "Pig", "pig" -> "猪";
+			case "Sheep", "sheep" -> "羊";
+			case "Chicken", "chicken" -> "鸡";
+			case "Mooshroom", "mooshroom" -> "哞菇";
+			case "Horse", "horse" -> "马";
+			case "Donkey", "donkey" -> "驴";
+			case "Mule", "mule" -> "骡";
+			default -> className;
+		};
+	}
+
+	// ---------- 入口：玩家用钓鱼竿勾住生物 ----------
+
+	private static final Map<UUID, Long> LAST_FISHING_ROD_HOOK = new ConcurrentHashMap<>();
+
+	/**
+	 * 玩家用钓鱼竿的浮标勾住了一个生物时触发。
+	 */
+	public static void onFishingRodHooked(net.minecraft.world.entity.Mob mob, ServerPlayer player) {
+		UUID playerId = player.getUUID();
+		long now = System.currentTimeMillis();
+
+		// 特殊处理：钓鱼竿勾住流浪商人的羊驼 → 商人来质问
+		String entityId = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(mob.getType()).getPath();
+		if (entityId.equals("trader_llama") || entityId.equals("llama")) {
+			Long last = LAST_FISHING_ROD_HOOK.get(mob.getUUID());
+			if (last != null && now - last < 8000) return;
+			LAST_FISHING_ROD_HOOK.put(mob.getUUID(), now);
+			handleTraderLlamaHooked(mob, player);
+			return;
+		}
+
+		// 特殊处理：钓鱼竿勾住女巫的黑猫 → 女巫来质问
+		if (entityId.equals("cat") || entityId.equals("black_cat")) {
+			Long last = LAST_FISHING_ROD_HOOK.get(mob.getUUID());
+			if (last != null && now - last < 8000) return;
+			LAST_FISHING_ROD_HOOK.put(mob.getUUID(), now);
+			handleWitchCatHooked(mob, player);
+			return;
+		}
+
+		if (!PersonaRegistry.supports(mob)) return;
+		Long last = LAST_FISHING_ROD_HOOK.get(mob.getUUID());
+		if (last != null && now - last < 8000) return; // 8秒冷却
+		LAST_FISHING_ROD_HOOK.put(mob.getUUID(), now);
+
+		// 钓鱼勾住 = 骚扰/挑衅，好感度降低
+		MobMindState.adjustFriendship(mob, playerId, -5);
+
+		boolean en = isEnglishUi(playerId);
+		boolean isIronGolem = mob.getClass().getSimpleName().equals("IronGolem");
+		boolean isVillager = mob instanceof net.minecraft.world.entity.npc.villager.Villager;
+		boolean isHostile = mob instanceof net.minecraft.world.entity.monster.Monster;
+
+		String prompt;
+		if (isIronGolem) {
+			prompt = en
+					? "(Player " + player.getGameProfile().name() + " just hooked YOU with a FISHING ROD! The hook is stuck in you and they're trying to reel you in like a fish! You are a mighty Iron Golem—this is an outrageous insult! Roar in anger, swat the hook away, and warn them you will attack if they don't stop!)"
+					: "（玩家" + player.getGameProfile().name() + "用钓鱼竿勾住了你！鱼钩扎在你身上，他们想像钓鱼一样把你拉过去！你是威武的铁傀儡——这是奇耻大辱！怒吼，挥开鱼钩，警告他们再不停止你就动手了！）";
+		} else if (isVillager) {
+			prompt = en
+					? "(Player " + player.getGameProfile().name() + " hooked you with a fishing rod! The fishing hook caught you and they're pulling on the line! That hurts and it's incredibly rude! Yell in pain/anger, demand they stop immediately, threaten to call the Iron Golem!)"
+					: "（玩家" + player.getGameProfile().name() + "用钓鱼竿勾住了你！鱼钩勾住了你的衣服/身体，他们正在拉线！这很疼而且非常无礼！疼得大叫，愤怒地要求他们立刻停下，威胁要叫铁傀儡来！）";
+		} else if (isHostile) {
+			prompt = en
+					? "(Player " + player.getGameProfile().name() + " hooked you with a fishing rod! They're trying to pull you like a fish! You are enraged! Roar/hiss/snarl and attack them immediately for this provocation!)"
+					: "（玩家" + player.getGameProfile().name() + "用钓鱼竿勾住了你！他们想像钓鱼一样拉你！你被激怒了！怒吼/嘶嘶/咆哮，立刻为这个挑衅攻击他们！）";
+		} else {
+			// 其他友好/中立生物（猫、狼、猪等）
+			prompt = en
+					? "(Player " + player.getGameProfile().name() + " hooked you with a fishing rod! That hurts and is very annoying! React in character—complain, yelp in surprise, or get annoyed. If you like them you might be confused; if not, get angry.)"
+					: "（玩家" + player.getGameProfile().name() + "用钓鱼竿勾住了你！很疼而且很烦人！以你的性格做出反应——抱怨、痛叫、或者恼火。如果你和他关系好可能感到困惑，否则生气。）";
+		}
+
+		// 铁傀儡/村民/敌对生物被钓鱼勾住时激怒
+		if (isIronGolem || isHostile) {
+			long gameTime = mob.level().getLevelData().getGameTime();
+			MobMindState.provoke(mob, playerId, gameTime + 2000); // 激怒约17秒
+			if (mob.getTarget() == null) mob.setTarget(player);
+		} else if (isVillager) {
+			long gameTime = mob.level().getLevelData().getGameTime();
+			MobMindState.provoke(mob, playerId, gameTime + 1000); // 村民激怒8秒（不会攻击但会跑/叫铁傀儡）
+		}
+
+		respond(player, mob, t(prompt, prompt, playerId), false);
+		MobMindState.recordGrudge(mob, playerId, "用钓鱼竿勾住我",
+				mob.level().getGameTime() + 12000);
+	}
+
+	/** 钓鱼竿勾住流浪商人的羊驼 → 商人来质问（好感度-5，价格受影响） */
+	private static void handleTraderLlamaHooked(net.minecraft.world.entity.Mob llama, ServerPlayer player) {
+		UUID playerId = player.getUUID();
+		ServerLevel level = (ServerLevel) llama.level();
+		// 找附近16格内的流浪商人（用 AbstractVillager 过滤 + 实体ID确认）
+		AABB box = llama.getBoundingBox().inflate(16.0);
+		List<net.minecraft.world.entity.npc.villager.AbstractVillager> traders = level.getEntitiesOfClass(
+				net.minecraft.world.entity.npc.villager.AbstractVillager.class, box, Entity::isAlive);
+		net.minecraft.world.entity.npc.villager.AbstractVillager trader = null;
+		for (var v : traders) {
+			String eid = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(v.getType()).getPath();
+			if (eid.equals("wandering_trader") && PersonaRegistry.supports(v)) {
+				trader = v;
+				break;
+			}
+		}
+		if (trader == null) return;
+
+		// 好感度-5（影响交易价格）
+		MobMindState.adjustFriendship(trader, playerId, -5);
+		MobMindState.recordGrudge(trader, playerId, "用钓鱼竿勾住我的羊驼",
+				trader.level().getGameTime() + 12000);
+
+		boolean en = isEnglishUi(playerId);
+		String prompt = en
+				? "(Player " + player.getGameProfile().name() + " just hooked your trader llama with a fishing rod! "
+				+ "Your poor llama is in pain! You're angry—demand they stop, threaten to raise your prices, "
+				+ "or refuse to trade with them! One short line.)"
+				: "（玩家" + player.getGameProfile().name() + "用钓鱼竿勾住了你的羊驼！你的羊驼疼得直叫！"
+				+ "你很生气——喝令他住手，威胁说要涨价，或者干脆不卖给他东西了！只说一句短话。）";
+		respond(player, trader, t(prompt, prompt, playerId), false);
+	}
+
+	/** 钓鱼竿勾住女巫的黑猫 → 女巫来质问并攻击（好感度-5） */
+	private static void handleWitchCatHooked(net.minecraft.world.entity.Mob cat, ServerPlayer player) {
+		UUID playerId = player.getUUID();
+		ServerLevel level = (ServerLevel) cat.level();
+		// 找附近16格内的女巫
+		AABB box = cat.getBoundingBox().inflate(16.0);
+		List<net.minecraft.world.entity.monster.Witch> witches = level.getEntitiesOfClass(
+				net.minecraft.world.entity.monster.Witch.class, box, Entity::isAlive);
+		if (witches.isEmpty()) return;
+
+		net.minecraft.world.entity.monster.Witch witch = witches.get(0);
+		if (!PersonaRegistry.supports(witch)) return;
+
+		// 好感度-5
+		MobMindState.adjustFriendship(witch, playerId, -5);
+		MobMindState.recordGrudge(witch, playerId, "用钓鱼竿勾住我的黑猫",
+				witch.level().getGameTime() + 12000);
+
+		// 女巫被激怒，开始攻击
+		long gameTime = witch.level().getLevelData().getGameTime();
+		MobMindState.provoke(witch, playerId, gameTime + 2000); // 激怒约17秒
+		if (witch.getTarget() == null) witch.setTarget(player);
+
+		boolean en = isEnglishUi(playerId);
+		String prompt = en
+				? "(Player " + player.getGameProfile().name() + " just hooked your beloved black cat with a fishing rod! "
+				+ "How DARE you hurt my familiar! You're furious—scream a curse, threaten them, and prepare to "
+				+ "throw potions at them! One short line.)"
+				: "（玩家" + player.getGameProfile().name() + "用钓鱼竿勾住了你的黑猫！你竟敢伤我的灵宠！"
+				+ "你怒不可遏——尖叫着诅咒他，威胁他，准备扔药水砸他！只说一句短话。）";
+		respond(player, witch, t(prompt, prompt, playerId), false);
+	}
+
+	// ---------- 入口：玩家给生物装鞍/马铠/用诡异菌 ----------
+
+	private static final Map<UUID, Long> LAST_EQUIP_REACT = new ConcurrentHashMap<>();
+
+	/**
+	 * 玩家给生物装备鞍、马铠或用诡异菌吸引炽足兽时触发。
+	 * @param itemType "saddle"=鞍, "armor"=马铠, "fungus"=诡异菌/诡异菌钓竿
+	 * @param tamed 是否已驯服（马类需要先驯服才能装鞍/马铠）
+	 */
+	public static void onRidingEquipmentApplied(net.minecraft.world.entity.Mob mob, ServerPlayer player,
+												 String itemType, boolean tamed) {
+		if (!PersonaRegistry.supports(mob)) return;
+		UUID playerId = player.getUUID();
+		long now = System.currentTimeMillis();
+		Long last = LAST_EQUIP_REACT.get(mob.getUUID());
+		if (last != null && now - last < 8000) return;
+		LAST_EQUIP_REACT.put(mob.getUUID(), now);
+
+		// 装鞍/马铠增加好感度（照顾/信任）
+		MobMindState.adjustFriendship(mob, playerId, "fungus".equals(itemType) ? 2 : 5);
+
+		boolean en = isEnglishUi(playerId);
+		String mobName = translateMobName(mob.getClass().getSimpleName());
+		String prompt;
+
+		if ("saddle".equals(itemType)) {
+			if (!tamed) {
+				// 马未驯服就不能装鞍（MC原版会阻止），但如果是炽足兽则不需要驯服
+				prompt = en
+						? "(Player " + player.getGameProfile().name() + " put a saddle on you! Now they can ride you. You accept this—you are ready to be their steed. React: maybe you're excited, proud, or just resigned to being a mount.)"
+						: "（玩家" + player.getGameProfile().name() + "给你装上了鞍！现在他们可以骑你了。你接受了——你准备好成为他们的坐骑了。做出反应：也许是兴奋、骄傲、或者认命于被骑的命运。）";
+			} else {
+				prompt = en
+						? "(Player " + player.getGameProfile().name() + " put a saddle on you! You trust them enough to let them ride you. React with acceptance—maybe nuzzle them or stamp your hooves eagerly, ready for adventure together.)"
+						: "（玩家" + player.getGameProfile().name() + "给你装上了鞍！你足够信任他们，让他们骑你。表达接受——蹭蹭他们或者兴奋地踏蹄，准备一起冒险。）";
+			}
+		} else if ("armor".equals(itemType)) {
+			prompt = en
+					? "(Player " + player.getGameProfile().name() + " put horse armor on you! You feel protected and cared for. React with gratitude—maybe toss your mane proudly or snort approvingly. This armor makes you feel strong!)"
+					: "（玩家" + player.getGameProfile().name() + "给你穿上了马铠！你感到被保护和被关心。表达感谢——也许骄傲地甩甩鬃毛，或满意地打个响鼻。这副铠甲让你觉得自己很强壮！）";
+		} else {
+			// 诡异菌/诡异菌钓竿吸引炽足兽
+			prompt = en
+					? "(Player " + player.getGameProfile().name() + " is luring you with Warped Fungus! You LOVE warped fungus—it's your favorite food! You can't resist following it eagerly toward the player. Express your excitement and hunger!)"
+					: "（玩家" + player.getGameProfile().name() + "用诡异菌在吸引你！你最爱诡异菌了——那是你最爱的美食！你忍不住渴望地跟着它走向玩家。表达你的兴奋和嘴馋！）";
+		}
+
+		respond(player, mob, t(prompt, prompt, playerId), false);
+	}
+
+	// ---------- 入口：玩家骑上生物 ----------
+
+	private static final Map<UUID, Long> LAST_RIDE_REACT = new ConcurrentHashMap<>();
+
+	/**
+	 * 玩家骑上支持AI的生物时触发（骷髅马、僵尸马、炽足兽等）。
+	 */
+	public static void onPlayerRideMob(net.minecraft.world.entity.Mob mob, ServerPlayer player) {
+		UUID playerId = player.getUUID();
+		String entityId = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE
+				.getKey(mob.getType()).getPath();
+
+		// 玩家骑流浪商人的驮羊驼 → 商人来质问（独立于羊驼自身骑乘反应，与拴羊驼共用30秒冷却）
+		if (entityId.equals("trader_llama")) {
+			onTraderLlamaRidden(mob, player);
+		}
+
+		long now = System.currentTimeMillis();
+		Long last = LAST_RIDE_REACT.get(mob.getUUID());
+		if (last != null && now - last < 10000) return; // 10秒冷却
+		LAST_RIDE_REACT.put(mob.getUUID(), now);
+
+		// 骑乘轻微增加好感度（信任）
+		MobMindState.adjustFriendship(mob, playerId, 1);
+
+		boolean en = isEnglishUi(playerId);
+		String prompt;
+
+		if (entityId.equals("skeleton_horse")) {
+			prompt = en
+					? "(Player " + player.getGameProfile().name() + " is now riding you, a Skeleton Horse! You are a creature of bone and undeath, yet you allow this rider on your back. React: maybe you snort rattling breath, accept the rider with quiet resignation, or feel a strange sense of purpose carrying the living.)"
+					: "（玩家" + player.getGameProfile().name() + "骑上了你——一匹骷髅马！你是骨骼与亡灵之躯，却允许这个骑手骑在你的背上。做出反应：也许你发出咔嗒作响的鼻息，默默认命地接受骑手，或者感到一种奇异的使命感——载着活人前行。）";
+		} else if (entityId.equals("zombie_horse")) {
+			prompt = en
+					? "(Player " + player.getGameProfile().name() + " is now riding you, a Zombie Horse! Your flesh is rotting yet you serve as a steed. React: groan with acceptance, or express surprise that a living being dares to ride your undead body. You tolerate it—you chose to trust them enough to be tamed.)"
+					: "（玩家" + player.getGameProfile().name() + "骑上了你——一匹僵尸马！你的血肉腐朽，却仍为坐骑。做出反应：接受地低吟，或惊讶于竟有活人敢骑你这不死之躯。你忍受着——因为你选择了信任他们，被他们驯服。）";
+		} else if (entityId.equals("strider")) {
+			prompt = en
+					? "(Player " + player.getGameProfile().name() + " is now riding you, a Strider! You are a gentle creature of the Nether, walking on lava with your wide flat feet. React: shiver slightly (you prefer warmth!), make a happy clicking sound, or express mild annoyance at being used as a lava-boat taxi.)"
+					: "（玩家" + player.getGameProfile().name() + "骑上了你——一只炽足兽！你是下界的温和生物，用宽扁的脚走在岩浆上。做出反应：微微发抖（你更喜欢温暖！）、发出开心的咔嗒声、或者对你被当作岩浆渡船出租车感到有点不满。）";
+		} else {
+			prompt = en
+					? "(Player " + player.getGameProfile().name() + " is now riding you! React to being mounted—express how you feel about carrying this player.)"
+					: "（玩家" + player.getGameProfile().name() + "骑上了你！对被骑乘做出反应——表达你对载着这个玩家的感受。）";
+		}
+
+		respond(player, mob, t(prompt, prompt, playerId), false);
+	}
+
+	// ========== 村民火灾呼救 ==========
+	/** 村民火灾呼救冷却：村民UUID → 上次呼救时间（毫秒） */
+	private static final Map<UUID, Long> LAST_FIRE_ALERT = new ConcurrentHashMap<>();
+	/** 已发现的火灾位置（防止重复喊）：位置key → 发现时间 */
+	private static final Map<Long, Long> KNOWN_FIRES = new ConcurrentHashMap<>();
+
+	/** 判断指定位置附近是否有火焰。营火不算，被不燃方块围起来的岩浆池也不算（岩浆若点燃东西会产生火焰方块）。返回最近的火灾位置，没找到返回null */
+	private static BlockPos findFireNearby(ServerLevel level, BlockPos center, int radius) {
+		BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
+		BlockPos closest = null;
+		double closestDist = Double.MAX_VALUE;
+		for (int dx = -radius; dx <= radius; dx++) {
+			for (int dy = -radius; dy <= radius; dy++) {
+				for (int dz = -radius; dz <= radius; dz++) {
+					cursor.set(center.getX() + dx, center.getY() + dy, center.getZ() + dz);
+					BlockState state = level.getBlockState(cursor);
+					Block block = state.getBlock();
+					String id = BuiltInRegistries.BLOCK.getKey(block).getPath();
+					// 营火/灵魂营火是正常使用的，不算火灾
+					if (id.equals("campfire") || id.equals("soul_campfire")) continue;
+					// 只检测真正的火焰方块（火/灵魂火）= 火灾
+					// 注意：岩浆(lava)不再直接判定为火灾——被圆石/石头等不燃方块围起来的人工岩浆池/壁炉是安全的
+					// 如果岩浆真的点燃了可燃物，会自然产生火焰方块，此时会被检测到
+					boolean isFire = false;
+					try {
+						isFire = block instanceof net.minecraft.world.level.block.BaseFireBlock;
+					} catch (NoClassDefFoundError e) {
+						isFire = id.equals("fire") || id.equals("soul_fire");
+					}
+					if (isFire || id.equals("fire") || id.equals("soul_fire")) {
+						double d = center.distSqr(cursor);
+						if (d < closestDist) {
+							closestDist = d;
+							closest = cursor.immutable();
+						}
+					}
+				}
+			}
+		}
+		return closest;
+	}
+
+	/** 每2秒检查一次：如果村民发现附近有火或自己身上着火，跑向玩家喊救火 */
+	public static void tryHouseFireAlert(MinecraftServer server) {
+		long now = System.currentTimeMillis();
+		KNOWN_FIRES.entrySet().removeIf(e -> now - e.getValue() > 120000);
+
+		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			if (!player.isAlive() || player.isSpectator()) continue; // 不再排除创造模式——着火了就是着火了
+			ServerLevel level = (ServerLevel) player.level();
+			if (level.dimension() == Level.NETHER || level.dimension() == Level.END) continue;
+
+			// 玩家32格内的村民都能跑来求救（范围加大）
+			AABB villagerBox = player.getBoundingBox().inflate(32.0);
+			List<Villager> villagers = level.getEntitiesOfClass(Villager.class, villagerBox,
+					v -> v.isAlive() && !v.isNoAi()); // 去掉getTarget()==null限制——被怪物追时也要喊救火
+			for (Villager villager : villagers) {
+				UUID vid = villager.getUUID();
+				Long lastAlert = LAST_FIRE_ALERT.get(vid);
+				if (lastAlert != null && now - lastAlert < 45000) continue;
+
+				// 检测村民10格范围内是否有火（增大范围），或者村民自己身上着火了
+				BlockPos firePos = findFireNearby(level, villager.blockPosition(), 10);
+				boolean villagerBurning = villager.isOnFire();
+				if (firePos == null && !villagerBurning) continue;
+
+				// 如果村民自己着火但没看到火方块，用村民位置作为火点
+				if (firePos == null) firePos = villager.blockPosition();
+
+				long posKey = firePos.asLong();
+				Long knownAt = KNOWN_FIRES.get(posKey);
+				if (knownAt != null && now - knownAt < 20000) continue; // 同一火灾位置20秒内不重复喊
+				KNOWN_FIRES.put(posKey, now);
+
+				// 村民跑向玩家（一边跑一边喊），如果在着火还会尝试远离火点
+				if (villagerBurning) {
+					// 自己着火了——往玩家方向跑，跳进水更好
+					villager.getNavigation().moveTo(player, 1.2);
+				} else {
+					villager.getNavigation().moveTo(player, 1.0);
+				}
+				villager.getLookControl().setLookAt(player);
+
+				LAST_FIRE_ALERT.put(vid, now);
+				UUID pid = player.getUUID();
+				boolean en = isEnglishUi(pid);
+
+				String fireDesc;
+				String fireId = BuiltInRegistries.BLOCK.getKey(level.getBlockState(firePos).getBlock()).getPath();
+				if (fireId.equals("lava") || fireId.equals("flowing_lava")) {
+					fireDesc = en ? "lava" : "岩浆";
+				} else {
+					fireDesc = en ? "fire" : "火";
+				}
+
+				String selfBurning = villagerBurning
+						? (en ? " I'M ON FIRE TOO! HELP!" : "我身上也着火了！救命啊！")
+						: "";
+
+				String prompt = en
+						? "(FIRE! THERE IS " + fireDesc.toUpperCase() + " NEARBY! " + selfBurning
+						+ " You see flames/smoke near your house at " + firePos.getX() + "," + firePos.getY() + "," + firePos.getZ()
+						+ "! You are TERRIFIED and PANICKING, running to player " + player.getGameProfile().name()
+						+ " screaming for help! Yell at them to PUT OUT THE FIRE NOW before everything burns down! "
+						+ "Your house, food, beds—all in danger! One short panicked cry.)"
+						: "（着火啦！！！是" + fireDesc + "！" + selfBurning
+						+ "你看到家附近有火光/浓烟，位置大概在" + firePos.getX() + "," + firePos.getY() + "," + firePos.getZ()
+						+ "！你吓坏了，极度恐慌地往玩家" + player.getGameProfile().name()
+						+ "那边跑，撕心裂肺地喊救命！叫他快来救火！快点！不然房子、粮食、床全烧光了！一句短而慌乱的惨叫。）";
+				respond(player, villager, prompt, false);
+
+				level.playSound(null, villager.getX(), villager.getY(), villager.getZ(),
+						SoundEvents.VILLAGER_HURT, SoundSource.NEUTRAL, 1.2f, 1.5f);
+
+				MobMindMod.LOGGER.info("[MobMind] Fire alert! villager={} at {} fire={} burning={}",
+						villager.getName().getString(), villager.blockPosition(), firePos, villagerBurning);
+				return;
+			}
+		}
+	}
+
+	// ========== 水流冲毁庄稼 → 村民喝止 ==========
+	/** 水冲作物冷却：玩家UUID → 上次骂的时间 */
+	private static final Map<UUID, Long> LAST_FLOOD_ALERT = new ConcurrentHashMap<>();
+	/** 已发现的淹水农田位置 */
+	private static final Map<Long, Long> KNOWN_FLOODS = new ConcurrentHashMap<>();
+
+	/** 每2秒检测一次：村庄农田被水冲时，村民来骂 */
+	public static void tryCropFloodAlert(MinecraftServer server) {
+		long now = System.currentTimeMillis();
+		KNOWN_FLOODS.entrySet().removeIf(e -> now - e.getValue() > 60000);
+
+		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			if (!player.isAlive() || player.isSpectator()) continue;
+			if (!(player.level() instanceof ServerLevel level)) continue;
+			if (level.dimension() == Level.NETHER || level.dimension() == Level.END) continue;
+
+			// 玩家32格内的村民
+			AABB villagerBox = player.getBoundingBox().inflate(32.0);
+			List<Villager> villagers = level.getEntitiesOfClass(Villager.class, villagerBox,
+					v -> v.isAlive() && !v.isNoAi());
+			for (Villager villager : villagers) {
+				if (!PersonaRegistry.supports(villager)) continue;
+				UUID pid = player.getUUID();
+				Long lastAlert = LAST_FLOOD_ALERT.get(pid);
+				if (lastAlert != null && now - lastAlert < 30000) continue; // 每个玩家30秒冷却
+
+				// 扫描村民周围12格内：寻找"农田正上方是水"的情况（正常灌溉水在旁边，不会在作物位置上）
+				BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
+				BlockPos floodPos = null;
+				BlockPos center = villager.blockPosition();
+				int r = 12;
+				outer:
+				for (int dx = -r; dx <= r; dx++) {
+					for (int dy = -2; dy <= 2; dy++) {
+						for (int dz = -r; dz <= r; dz++) {
+							cursor.set(center.getX() + dx, center.getY() + dy, center.getZ() + dz);
+							BlockState state = level.getBlockState(cursor);
+							String id = BuiltInRegistries.BLOCK.getKey(state.getBlock()).getPath();
+							// 水（静水或流动水）出现在这个位置
+							boolean isWater = id.equals("water") || id.equals("flowing_water");
+							if (!isWater) continue;
+							// 正下方是农田（farmland）→ 作物被冲了！
+							BlockPos below = cursor.below();
+							BlockState belowState = level.getBlockState(below);
+							String belowId = BuiltInRegistries.BLOCK.getKey(belowState.getBlock()).getPath();
+							if (belowId.equals("farmland")) {
+								// 排除玩家自己锄的田
+								if (com.mobmind.behavior.HouseGuard.isPlayerPlaced(below)) continue;
+								// 必须在村庄结构内
+								if (!isInVillage(level, below)) continue;
+								floodPos = cursor.immutable();
+								break outer;
+							}
+						}
+					}
+				}
+
+				if (floodPos == null) continue;
+
+				// 防止同一淹水位置反复触发
+				long posKey = floodPos.asLong();
+				Long knownAt = KNOWN_FLOODS.get(posKey);
+				if (knownAt != null && now - knownAt < 20000) continue;
+				KNOWN_FLOODS.put(posKey, now);
+				LAST_FLOOD_ALERT.put(pid, now);
+
+				// 村民跑向玩家
+				villager.getNavigation().moveTo(player, 1.0);
+				villager.getLookControl().setLookAt(player);
+
+				boolean en = isEnglishUi(pid);
+				boolean isFarmer = isFarmer(villager);
+
+				String prompt = en
+						? "(WATER! There's water flooding the crops at " + floodPos.getX() + "," + floodPos.getY() + "," + floodPos.getZ()
+						+ "! " + (isFarmer ? "You're the farmer—" : "") + "Our crops are being WASHED AWAY! Run to player " + player.getGameProfile().name()
+						+ " angrily, yelling at them to STOP THE WATER immediately! Block it, dam it, do something! The crops will all be destroyed! One short furious/panicked cry.)"
+						: "（水！！！水在" + floodPos.getX() + "," + floodPos.getY() + "," + floodPos.getZ()
+						+ "淹庄稼了！" + (isFarmer ? "你是种地的农民——" : "")
+						+ "我们的庄稼要被冲光了！愤怒地跑向玩家" + player.getGameProfile().name()
+						+ "，冲他大喊快把水堵上！堵起来！快想办法！不然所有作物都毁了！一句又急又气的短话。）";
+				respond(player, villager, prompt, false);
+
+				// 播放不安的声音
+				level.playSound(null, villager.getX(), villager.getY(), villager.getZ(),
+						SoundEvents.VILLAGER_AMBIENT, SoundSource.NEUTRAL, 1.0f, 0.8f);
+
+				MobMindMod.LOGGER.info("[MobMind] Crop flood alert! villager={} flood={} isFarmer={}",
+						villager.getName().getString(), floodPos, isFarmer);
+				MobMindState.adjustFriendship(villager, pid, -2);
+				return;
+			}
+		}
 	}
 }

@@ -24,6 +24,8 @@ import java.util.function.Supplier;
  */
 public class ConfigScreen extends Screen {
 	private final Screen parent;
+	/** 编辑中的临时配置副本，点保存才写回全局，点取消直接丢弃 */
+	private MobMindConfig draft;
 	private final List<EditBox> fields = new ArrayList<>();
 	private final List<Scrollable> scrollables = new ArrayList<>();
 	private final List<Renderable> scrollRenderables = new ArrayList<>();
@@ -45,7 +47,10 @@ public class ConfigScreen extends Screen {
 
 	@Override
 	protected void init() {
-		MobMindConfig cfg = MobMindConfig.get();
+		// 创建当前配置的深拷贝作为草稿，所有编辑只修改草稿，点保存才写回全局
+		MobMindConfig current = MobMindConfig.get();
+		draft = copyConfig(current);
+		MobMindConfig cfg = draft;
 		fields.clear();
 		scrollables.clear();
 		scrollRenderables.clear();
@@ -68,8 +73,8 @@ public class ConfigScreen extends Screen {
 		// === 左栏：云端 API ===
 		addSectionTitle(lx1, y, "gui.mobmind.config.section.api");
 		y += 16;
-		y = addRow(lx1, colW, y, "gui.mobmind.config.label.apiEndpoint", cfg.apiEndpoint, v -> cfg.apiEndpoint = v);
-		y = addRow(lx1, colW, y, "gui.mobmind.config.label.apiKey", cfg.apiKey, v -> cfg.apiKey = v, true, null);
+		y = addRow(lx1, colW, y, "gui.mobmind.config.label.apiEndpoint", cfg.apiEndpoint, v -> cfg.apiEndpoint = v, false, "gui.mobmind.config.hint.apiEndpoint");
+		y = addRow(lx1, colW, y, "gui.mobmind.config.label.apiKey", cfg.apiKey, v -> cfg.apiKey = v, true, "gui.mobmind.config.hint.apiKey");
 		y = addRow(lx1, colW, y, "gui.mobmind.config.label.chatModel", cfg.chatModel, v -> cfg.chatModel = v);
 		y = addRow(lx1, colW, y, "gui.mobmind.config.label.temperature", String.valueOf(cfg.temperature),
 				v -> cfg.temperature = parseDouble(v, cfg.temperature));
@@ -146,11 +151,15 @@ public class ConfigScreen extends Screen {
 		// 保存/取消按钮固定在最下方
 		int btnY = this.height - 28;
 		saveButton = Button.builder(Component.translatable("gui.mobmind.config.button.save"), b -> {
+			// 保存：将草稿写回全局单例，再持久化到磁盘
+			applyDraftToGlobal(draft);
 			MobMindConfig.save();
 			this.onClose();
 		}).bounds(this.width / 2 - 105, btnY, 100, 20).build();
-		cancelButton = Button.builder(Component.translatable("gui.mobmind.config.button.cancel"), b -> this.onClose())
-				.bounds(this.width / 2 + 5, btnY, 100, 20).build();
+		cancelButton = Button.builder(Component.translatable("gui.mobmind.config.button.cancel"), b -> {
+			// 取消：草稿直接丢弃，不写回全局
+			this.onClose();
+		}).bounds(this.width / 2 + 5, btnY, 100, 20).build();
 		this.addRenderableWidget(saveButton);
 		this.addRenderableWidget(cancelButton);
 
@@ -325,6 +334,49 @@ public class ConfigScreen extends Screen {
 	@Override
 	public void onClose() {
 		this.minecraft.setScreenAndShow(parent);
+	}
+
+	/** 深拷贝配置对象（通过Gson序列化/反序列化） */
+	private static MobMindConfig copyConfig(MobMindConfig src) {
+		com.google.gson.Gson gson = new com.google.gson.Gson();
+		String json = gson.toJson(src);
+		return gson.fromJson(json, MobMindConfig.class);
+	}
+
+	/** 将草稿配置的所有字段写回全局单例 */
+	private static void applyDraftToGlobal(MobMindConfig draft) {
+		MobMindConfig global = MobMindConfig.get();
+		global.apiEndpoint = draft.apiEndpoint;
+		global.apiKey = draft.apiKey;
+		global.chatModel = draft.chatModel;
+		global.sttModel = draft.sttModel;
+		global.ttsModel = draft.ttsModel;
+		global.ttsVoice = draft.ttsVoice;
+		global.temperature = draft.temperature;
+		global.maxTokens = draft.maxTokens;
+		global.sttLanguage = draft.sttLanguage;
+		global.voiceEnabled = draft.voiceEnabled;
+		global.ttsEnabled = draft.ttsEnabled;
+		global.greetingEnabled = draft.greetingEnabled;
+		global.creativeTauntEnabled = draft.creativeTauntEnabled;
+		global.interactRadius = draft.interactRadius;
+		global.offlineFallback = draft.offlineFallback;
+		global.gossipEnabled = draft.gossipEnabled;
+		global.gossipRadius = draft.gossipRadius;
+		global.gossipChance = draft.gossipChance;
+		global.gossipPenalty = draft.gossipPenalty;
+		global.gossipReactChance = draft.gossipReactChance;
+		global.voiceEngineDir = draft.voiceEngineDir;
+		global.sttModelDir = draft.sttModelDir;
+		global.ttsModelDir = draft.ttsModelDir;
+		global.ttsVoiceCount = draft.ttsVoiceCount;
+		global.forceTtsVoiceId = draft.forceTtsVoiceId;
+		global.ttsVoicePool = draft.ttsVoicePool;
+		global.ttsSpeed = draft.ttsSpeed;
+		global.voiceThreads = draft.voiceThreads;
+		global.micMixerName = draft.micMixerName;
+		global.recallCount = draft.recallCount;
+		global.recallVillagers = draft.recallVillagers;
 	}
 
 	private record Scrollable(AbstractWidget widget, int originalY) {}

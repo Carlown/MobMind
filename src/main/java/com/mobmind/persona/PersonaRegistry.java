@@ -44,7 +44,7 @@ public final class PersonaRegistry {
 	private static void load() {
 		try (InputStream in = PersonaRegistry.class.getResourceAsStream("/assets/mobmind/personas/index.json")) {
 			if (in == null) {
-				MobMindMod.LOGGER.warn("[MobMind] 未找到生物设定索引 index.json");
+				MobMindMod.LOGGER.warn("[MobMind] Mob persona index index.json not found");
 				return;
 			}
 			JsonObject root = JsonParser.parseString(new String(in.readAllBytes(), StandardCharsets.UTF_8)).getAsJsonObject();
@@ -59,9 +59,9 @@ public final class PersonaRegistry {
 						readText(key));
 				(baby ? BABY_BY_ENTITY : BY_ENTITY).put(entity, p);
 			}
-			MobMindMod.LOGGER.info("[MobMind] 已加载 {} 份生物专属设定", BY_ENTITY.size() + BABY_BY_ENTITY.size());
+			MobMindMod.LOGGER.info("[MobMind] Loaded {} mob-specific personas", BY_ENTITY.size() + BABY_BY_ENTITY.size());
 		} catch (Exception e) {
-			MobMindMod.LOGGER.error("[MobMind] 生物设定加载失败", e);
+			MobMindMod.LOGGER.error("[MobMind] Failed to load mob personas", e);
 		}
 	}
 
@@ -88,5 +88,11 @@ public final class PersonaRegistry {
 	/** 是否启用 AI（只有设定包内的生物启用，普通动物不启用） */
 	public static boolean supports(Mob mob) {
 		return forMob(mob) != null;
+	}
+
+	/** 该实体类型是否有幼年设定（用于判断是否从幼崽长大，需在成年后切换口吻） */
+	public static boolean hasBabyPersona(Mob mob) {
+		Identifier id = BuiltInRegistries.ENTITY_TYPE.getKey(mob.getType());
+		return BABY_BY_ENTITY.containsKey(id.toString());
 	}
 }

@@ -6,6 +6,7 @@ import com.google.gson.reflect.TypeToken;
 import com.mobmind.MobMindMod;
 import com.mobmind.persona.Personality;
 import com.mobmind.persona.PersonalityGenerator;
+import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -154,7 +155,7 @@ public final class MobMindState {
 	public static void setPlayerLanguage(ServerPlayer player, String languageCode) {
 		if (player == null || languageCode == null) return;
 		PLAYER_LANGUAGE.put(player.getUUID(), languageCode);
-		MobMindMod.LOGGER.info("[MobMind] 玩家 {} 语言设置为 {}", player.getGameProfile().name(), languageCode);
+		MobMindMod.LOGGER.info("[MobMind] Player {} language set to {}", player.getGameProfile().name(), languageCode);
 	}
 
 	/** 判断玩家是否使用英文界面（优先使用客户端同步的语言，兜底用服务端 Language 类检测） */
@@ -729,8 +730,34 @@ public final class MobMindState {
 	/** entityUuid -> (playerUuid -> 激怒截止 gameTime) */
 	private static final Map<UUID, Map<UUID, Long>> PROVOKED = new ConcurrentHashMap<>();
 
+	/** 怨恨记忆：entityUuid -> (playerUuid -> List<(描述, 过期gameTime)>) */
+	private static final Map<UUID, Map<UUID, java.util.List<Grudge>>> GRUDGES = new ConcurrentHashMap<>();
+
+	/** 玩家放置的方块位置记录（"x,y,z" 字符串），持久化到 mobmind.json，用于排除玩家自己放的栅栏/床/作物等 */
+	private static final java.util.Set<String> PLAYER_PLACED = ConcurrentHashMap.newKeySet();
+
+	/** 一条怨恨记录 */
+	public record Grudge(String description, long expireGameTime) {}
+
 	public static void provoke(Mob mob, UUID playerId, long untilGameTime) {
 		PROVOKED.computeIfAbsent(mob.getUUID(), k -> new ConcurrentHashMap<>()).put(playerId, untilGameTime);
+	}
+
+	/** 记录一条怨恨（玩家做了惹怒生物的事），用于AI长期记忆 */
+	public static void recordGrudge(Mob mob, UUID playerId, String description, long expireGameTime) {
+		GRUDGES.computeIfAbsent(mob.getUUID(), k -> new ConcurrentHashMap<>())
+				.computeIfAbsent(playerId, k -> new java.util.concurrent.CopyOnWriteArrayList<>())
+				.add(new Grudge(description, expireGameTime));
+	}
+
+	/** 获取对某玩家的活跃怨恨列表（自动过滤过期的） */
+	public static java.util.List<Grudge> getActiveGrudges(Mob mob, UUID playerId, long gameTime) {
+		Map<UUID, java.util.List<Grudge>> map = GRUDGES.get(mob.getUUID());
+		if (map == null) return java.util.List.of();
+		java.util.List<Grudge> list = map.get(playerId);
+		if (list == null || list.isEmpty()) return java.util.List.of();
+		list.removeIf(g -> gameTime > g.expireGameTime());
+		return list;
 	}
 
 	public static boolean isProvokedTowards(Mob mob, UUID playerId, long gameTime) {
@@ -883,9 +910,16 @@ public final class MobMindState {
 				}
 			}
 		}
-		MobMindMod.LOGGER.info("[MobMind] 已加载 {} 只生物的人格档案，{} 只生物的对话历史", PERSONALITIES.size(), CONVERSATION_HISTORY.size());
+		if (root.has("playerPlaced")) {
+			try {
+				for (var e : root.getAsJsonArray("playerPlaced")) {
+					if (e.isJsonPrimitive()) PLAYER_PLACED.add(e.getAsString());
+				}
+			} catch (Exception ignored) {}
+		}
+		MobMindMod.LOGGER.info("[MobMind] Loaded {} mob persona profiles, {} mob conversation histories", PERSONALITIES.size(), CONVERSATION_HISTORY.size());
 		} catch (Exception e) {
-			MobMindMod.LOGGER.warn("[MobMind] 存档数据读取失败", e);
+			MobMindMod.LOGGER.warn("[MobMind] Failed to read save data", e);
 		}
 	}
 
@@ -929,6 +963,10 @@ public final class MobMindState {
 		com.google.gson.JsonObject sf = new com.google.gson.JsonObject();
 		STORED_FOOD.forEach((uuid, count) -> sf.addProperty(uuid.toString(), count));
 		root.add("storedFood", sf);
+		// 玩家放置的方块记录（持久化）
+		com.google.gson.JsonArray pp = new com.google.gson.JsonArray();
+		PLAYER_PLACED.forEach(pp::add);
+		root.add("playerPlaced", pp);
 		try {
 			Path tmp = saveFile.resolveSibling("mobmind.json.tmp");
 			try (Writer w = Files.newBufferedWriter(tmp)) {
@@ -936,7 +974,7 @@ public final class MobMindState {
 			}
 			Files.move(tmp, saveFile, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
 		} catch (IOException e) {
-			MobMindMod.LOGGER.warn("[MobMind] 存档数据保存失败", e);
+			MobMindMod.LOGGER.warn("[MobMind] Failed to save save data", e);
 		}
 	}
 
@@ -946,6 +984,7 @@ public final class MobMindState {
 		ORDERS.clear();
 		CALMED.clear();
 		PROVOKED.clear();
+		GRUDGES.clear();
 		BARTER_DEALS.clear();
 		BARGAINS.clear();
 		CONVERSATION_HISTORY.clear();
@@ -954,6 +993,7 @@ public final class MobMindState {
 		TOTEMS.clear();
 		STORED_FOOD.clear();
 		GLOW_UNTIL.clear();
+		PLAYER_PLACED.clear();
 		saveFile = null;
 	}
 
@@ -1112,6 +1152,31 @@ public final class MobMindState {
 		clearCuringZombieVillager(entityId);
 	}
 
+	/** 清除所有生物对指定玩家的激怒状态和怨恨记录（玩家死亡/重生后调用，给玩家一个冷却期） */
+	public static void clearPlayerHostility(UUID playerId) {
+		// 清除所有生物对该玩家的 PROVOKED 标记
+		PROVOKED.values().forEach(map -> map.remove(playerId));
+		// 清除所有生物对该玩家的 GRUDGES 记录
+		GRUDGES.values().forEach(map -> map.remove(playerId));
+	}
+
+	// ---------- 玩家放置方块记录（持久化） ----------
+
+	/** 标记一个位置为玩家放置的方块 */
+	public static void markPlayerPlaced(BlockPos pos) {
+		PLAYER_PLACED.add(pos.getX() + "," + pos.getY() + "," + pos.getZ());
+	}
+
+	/** 检查位置是否是玩家放置的方块 */
+	public static boolean isPlayerPlaced(BlockPos pos) {
+		return PLAYER_PLACED.contains(pos.getX() + "," + pos.getY() + "," + pos.getZ());
+	}
+
+	/** 从玩家放置记录中移除一个位置（方块被破坏时调用） */
+	public static void removePlayerPlaced(BlockPos pos) {
+		PLAYER_PLACED.remove(pos.getX() + "," + pos.getY() + "," + pos.getZ());
+	}
+
 	/** 重载：标记玩家给武器（通过 UUID） */
 	public static void markPlayerGivenWeapon(UUID entityId) {
 		PLAYER_GIVEN_WEAPON.add(entityId);
@@ -1190,7 +1255,7 @@ public final class MobMindState {
 		}
 		// 清除旧数据
 		clearEntityData(oldId);
-		com.mobmind.MobMindMod.LOGGER.info("[MobMind] 数据迁移完成: {} → {} ({})",
+		com.mobmind.MobMindMod.LOGGER.info("[MobMind] Data migration complete: {} → {} ({})",
 				oldId, newId, newMob.getType().getDescription().getString());
 	}
 

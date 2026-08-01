@@ -56,8 +56,8 @@ public final class TntFear {
 					double distHorizSqr = dx * dx + dz * dz;
 					if (distHorizSqr > FLEE_RADIUS * FLEE_RADIUS) continue;
 
-					com.mobmind.MobMindMod.LOGGER.info("[MobMind] {} 检测到 TNT 在 {}，准备逃跑",
-							mob.getType().getDescription().getString(), nearestTnt);
+					com.mobmind.MobMindMod.LOGGER.info("[MobMind] {} detected TNT at {}, preparing to flee",
+						mob.getType().getDescription().getString(), nearestTnt);
 
 					// 正在睡觉的会被炸醒
 					if (mob.isSleeping()) {
@@ -128,7 +128,7 @@ public final class TntFear {
 		}
 		if (!(nearest instanceof ServerPlayer player) || bestDist > 1024) return;
 
-		com.mobmind.MobMindMod.LOGGER.info("[MobMind] 村民 {} 向 {} 请求拆除 TNT {}",
+		com.mobmind.MobMindMod.LOGGER.info("[MobMind] Villager {} requested {} to remove TNT {}",
 				villager.getUUID(), player.getGameProfile().name(), tntPos);
 		LAST_VILLAGER_PLEA.put(vid, now);
 		MobAiService.sendScaredTntPlea(villager, player, tntPos);

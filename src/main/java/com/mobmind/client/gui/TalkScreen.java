@@ -19,7 +19,7 @@ public class TalkScreen extends Screen {
 	private EditBox input;
 
 	public TalkScreen(int entityId, String mobDesc) {
-		super(Component.literal("与 " + mobDesc + " 对话"));
+		super(Component.translatable("gui.mobmind.talk.title", mobDesc));
 		this.entityId = entityId;
 		this.mobDesc = mobDesc;
 	}
@@ -27,9 +27,9 @@ public class TalkScreen extends Screen {
 	@Override
 	protected void init() {
 		input = new EditBox(this.font, this.width / 2 - 150, this.height / 2, 300, 20,
-				Component.literal("对话内容"));
+				Component.translatable("gui.mobmind.talk.input"));
 		input.setMaxLength(500);
-		input.setHint(Component.literal("输入想说的话，回车发送…"));
+		input.setHint(Component.translatable("gui.mobmind.talk.hint"));
 		input.setBordered(true);
 		this.addRenderableWidget(input);
 		this.setInitialFocus(input);

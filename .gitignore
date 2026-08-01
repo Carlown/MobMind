@@ -52,3 +52,6 @@ _crash_extract/
 
 # Extra changelog drafts
 CHANGELOG_*.md
+
+# Local distribution / preview copies
+new/

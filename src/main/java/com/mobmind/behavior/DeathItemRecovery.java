@@ -35,7 +35,7 @@ public class DeathItemRecovery {
 	private record DeathLocation(UUID playerUuid, double x, double y, double z, long deathTime,
 								  String deathDimension) {}
 
-	/** 玩家死亡时调用：记录死亡位置和掉落物 */
+	/** 玩家死亡时调用：记录死亡位置和掉落物，并清除所有生物对该玩家的激怒/怨恨/作案计数 */
 	public static void onPlayerDeath(ServerPlayer player) {
 		if (player == null || player.level() == null) return;
 		UUID playerUuid = player.getUUID();
@@ -44,8 +44,26 @@ public class DeathItemRecovery {
 		long deathTime = System.currentTimeMillis();
 
 		DEATH_LOCATIONS.put(playerUuid, new DeathLocation(playerUuid, x, y, z, deathTime, dimension));
-		MobMindMod.LOGGER.info("[MobMind] 玩家 {} 死亡于 {} ({}, {}, {})", player.getGameProfile().name(),
-				dimension, x, y, z);
+		MobMindMod.LOGGER.info("[MobMind] Player {} died at {} ({}, {}, {})", player.getGameProfile().name(),
+			dimension, x, y, z);
+
+		// 玩家死亡 → 清除所有生物对该玩家的激怒状态、怨恨记录、作案计数
+		// 这样重生后铁傀儡不会立刻再来打（给玩家一个冷却期，好感度仍然保留需要慢慢修复）
+		MobMindState.clearPlayerHostility(playerUuid);
+		HouseGuard.clearOffenseCount(playerUuid);
+
+		// 清除所有正在以该玩家为目标的生物的攻击目标（铁傀儡/敌对生物等）
+		MinecraftServer server = player.level().getServer();
+		if (server != null) {
+			for (ServerLevel sl : server.getAllLevels()) {
+				for (var e : sl.getAllEntities()) {
+					if (e instanceof Mob mob && mob.getTarget() == player) {
+						mob.setTarget(null);
+						mob.setLastHurtByMob(null);
+					}
+				}
+			}
+		}
 
 		// 记录死亡位置附近的掉落物（玩家死亡掉落的物品）
 		if (!(player.level() instanceof ServerLevel serverLevel)) return;
@@ -54,7 +72,7 @@ public class DeathItemRecovery {
 		for (ItemEntity ie : nearbyDrops) {
 			DEATH_DROPS_OWNER.put(ie.getUUID(), playerUuid);
 		}
-		MobMindMod.LOGGER.info("[MobMind] 记录了 {} 个死亡掉落物", nearbyDrops.size());
+		MobMindMod.LOGGER.info("[MobMind] Recorded {} death drops", nearbyDrops.size());
 	}
 
 	/** 玩家复活时调用：让附近的友好生物归还物品 */
@@ -64,8 +82,8 @@ public class DeathItemRecovery {
 		DeathLocation deathLoc = DEATH_LOCATIONS.get(playerUuid);
 		if (deathLoc == null) return;
 
-		MobMindMod.LOGGER.info("[MobMind] 玩家 {} 复活，检查附近友好生物是否捡到了死亡掉落物",
-				player.getGameProfile().name());
+		MobMindMod.LOGGER.info("[MobMind] Player {} respawned, checking if nearby friendly mobs picked up death drops",
+			player.getGameProfile().name());
 
 		// 扫描复活点附近的友好生物
 		if (!(player.level() instanceof ServerLevel serverLevel)) return;
@@ -84,10 +102,10 @@ public class DeathItemRecovery {
 				ItemStack stack = inventory.getItem(i);
 				if (stack.isEmpty()) continue;
 				// 归还给玩家
-				MobMindMod.LOGGER.info("[MobMind] 友好生物 {} 归还玩家 {} 的死亡掉落物: {}×{}",
-						mob.getType().getDescription().getString(),
-						player.getGameProfile().name(),
-						stack.getHoverName().getString(), stack.getCount());
+				MobMindMod.LOGGER.info("[MobMind] Friendly mob {} returned player {}'s death drops: {}×{}",
+					mob.getType().getDescription().getString(),
+					player.getGameProfile().name(),
+					stack.getHoverName().getString(), stack.getCount());
 				// 丢给玩家
 				ItemEntity drop = new ItemEntity(serverLevel, player.getX(), player.getY() + 0.5,
 						player.getZ(), stack.copy());
@@ -141,7 +159,7 @@ public class DeathItemRecovery {
 						if (remaining.isEmpty()) {
 							ie.discard();
 							DEATH_DROPS_OWNER.remove(ie.getUUID());
-							MobMindMod.LOGGER.info("[MobMind] 友好生物 {} 捡起玩家死亡掉落物: {}×{}",
+							MobMindMod.LOGGER.info("[MobMind] Friendly mob {} picked up player's death drops: {}×{}",
 									nearestMob.getType().getDescription().getString(),
 									ie.getItem().getHoverName().getString(), ie.getItem().getCount());
 						} else {

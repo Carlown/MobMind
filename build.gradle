@@ -12,12 +12,16 @@ base {
 
 repositories {
 	maven { url = uri("libs/repo") }
+	maven { url = uri("https://maven.terraformersmc.com/releases/") }
 }
 
 dependencies {
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
 	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
 	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+
+	// Mod Menu API（可选，提供游戏内配置按钮）
+	compileOnly "com.terraformersmc:modmenu:20.0.1"
 
 	// sherpa-onnx Java JNI（本地语音引擎，模型常驻内存）
 	implementation "com.k2fsa.sherpa.onnx:sherpa-onnx-jvm:1.13.4"

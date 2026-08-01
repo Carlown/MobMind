@@ -50,6 +50,6 @@ public abstract class VillagerMixin {
 
 		Mob witch = nearby.get(0);
 		MobMindState.transferAllData(oldId, witch.getUUID(), witch);
-		com.mobmind.MobMindMod.LOGGER.info("[MobMind] 村民被雷劈变成女巫(后备路径): 记忆已迁移到 {}", witch.getUUID());
+		com.mobmind.MobMindMod.LOGGER.info("[MobMind] Villager struck by lightning turned into witch (fallback path): memory migrated to {}", witch.getUUID());
 	}
 }

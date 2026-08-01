@@ -56,9 +56,10 @@ public class MobMindClient implements ClientModInitializer {
 		ClientTickEvents.END_CLIENT_TICK.register(mc -> {
 			boolean ctrl = InputConstants.isKeyDown(mc.getWindow(), GLFW.GLFW_KEY_LEFT_CONTROL)
 					|| InputConstants.isKeyDown(mc.getWindow(), GLFW.GLFW_KEY_RIGHT_CONTROL);
-			// Ctrl+K 打开设置（直接检测按键，不依赖键位绑定缓存）
+			// Ctrl+K 打开设置（安装了模组菜单时失效，改用模组菜单齿轮图标）
 			boolean kDown = InputConstants.isKeyDown(mc.getWindow(), GLFW.GLFW_KEY_K);
-			if (kDown && ctrl && !prevConfigDown && mc.player != null) {
+			if (kDown && ctrl && !prevConfigDown && mc.player != null
+					&& !net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("modmenu")) {
 				mc.setScreenAndShow(new ConfigScreen(null));
 			}
 			prevConfigDown = kDown;
@@ -88,7 +89,7 @@ public class MobMindClient implements ClientModInitializer {
 			}
 		});
 
-		MobMindMod.LOGGER.info("[MobMind] 客户端已初始化 (V=切换录音 Ctrl+V=按住说话 Ctrl+K=设置 Ctrl+Z=召唤朋友 Ctrl+X=送回朋友)");
+		MobMindMod.LOGGER.info("[MobMind] Client initialized (V=toggle recording Ctrl+V=push-to-talk Ctrl+K=settings Ctrl+Z=summon friend Ctrl+X=send back friend)");
 
 		// 进入世界后后台预热本地语音模型，首次对话零等待
 		net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
@@ -109,7 +110,7 @@ public class MobMindClient implements ClientModInitializer {
 				return mc.getLanguageManager().getSelected();
 			}
 		} catch (Exception e) {
-			MobMindMod.LOGGER.warn("[MobMind] 获取语言代码失败: {}", e.getMessage());
+			MobMindMod.LOGGER.warn("[MobMind] Failed to get language code: {}", e.getMessage());
 		}
 		return null;
 	}
@@ -130,13 +131,13 @@ public class MobMindClient implements ClientModInitializer {
 		if (speechText.isEmpty()) return;
 		boolean english = isEnglishUi();
 		int voiceId = LocalVoice.voiceIdForLocale(payload.voiceId(), cfg, english);
-		MobMindMod.LOGGER.info("[MobMind] 朗读准备: {} voice={} english={}", speechText, voiceId, english);
+		MobMindMod.LOGGER.info("[MobMind] TTS preparation: {} voice={} english={}", speechText, voiceId, english);
 		if (LocalVoice.isTtsReady(cfg) && SherpaLocal.isTtsAvailable(cfg)) {
 			MobMindExecutor.runAsync(() -> {
 				long t0 = System.currentTimeMillis();
 				com.k2fsa.sherpa.onnx.GeneratedAudio audio = SherpaLocal.synth(cfg, voiceId, speechText);
 				long synthMs = System.currentTimeMillis() - t0;
-				MobMindMod.LOGGER.info("[MobMind] 本地 TTS 合成 {}ms", synthMs);
+				MobMindMod.LOGGER.info("[MobMind] Local TTS synthesis {}ms", synthMs);
 				if (audio != null && audio.getSamples().length > 0) {
 					TtsPlayer.play(audio.getSamples(), audio.getSampleRate());
 				}
@@ -146,7 +147,7 @@ public class MobMindClient implements ClientModInitializer {
 				try {
 					long t0 = System.currentTimeMillis();
 					java.nio.file.Path wav = SherpaEngine.synthesize(cfg, voiceId, speechText);
-					MobMindMod.LOGGER.info("[MobMind] exe TTS 合成 {}ms", System.currentTimeMillis() - t0);
+					MobMindMod.LOGGER.info("[MobMind] exe TTS synthesis {}ms", System.currentTimeMillis() - t0);
 					if (wav != null) {
 						TtsPlayer.play(wav);
 					}
@@ -159,7 +160,7 @@ public class MobMindClient implements ClientModInitializer {
 				try {
 					long t0 = System.currentTimeMillis();
 					byte[] wav = OpenAiClient.speak(cfg, speechText);
-					MobMindMod.LOGGER.info("[MobMind] API TTS 合成 {}ms", System.currentTimeMillis() - t0);
+					MobMindMod.LOGGER.info("[MobMind] API TTS synthesis {}ms", System.currentTimeMillis() - t0);
 					TtsPlayer.play(wav);
 				} catch (Exception e) {
 					MobMindMod.LOGGER.debug("[MobMind] TTS 失败: {}", e.getMessage());

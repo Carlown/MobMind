@@ -278,10 +278,10 @@ public final class ItemCatalog {
 								if (item != null) map.put(zhName, item);
 							});
 							POTION_BY_ZH = potionMap;
-							MobMindMod.LOGGER.info("[MobMind] 物品中文名目录已加载: {} 条, 药水效果 {} 条", map.size(), potionMap.size());
+							MobMindMod.LOGGER.info("[MobMind] Chinese item name catalog loaded: {} entries, potion effects {} entries", map.size(), potionMap.size());
 						}
 					} catch (Exception e) {
-						MobMindMod.LOGGER.warn("[MobMind] 物品中文名目录加载失败: {}", e.getMessage());
+						MobMindMod.LOGGER.warn("[MobMind] Failed to load Chinese item name catalog: {}", e.getMessage());
 					}
 					BY_ZH = map;
 				}
@@ -387,7 +387,7 @@ public final class ItemCatalog {
 						}
 					}
 					POTION_BY_EN = enPotionMap;
-					MobMindMod.LOGGER.info("[MobMind] 英文物品目录已加载: {} 条, 英文药水效果 {} 条", map.size(), enPotionMap.size());
+					MobMindMod.LOGGER.info("[MobMind] English item catalog loaded: {} entries, English potion effects {} entries", map.size(), enPotionMap.size());
 				}
 			}
 		}

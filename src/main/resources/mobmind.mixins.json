@@ -14,7 +14,13 @@
     "MeleeAttackGoalMixin",
     "RangedBowAttackGoalMixin",
     "RangedCrossbowAttackGoalMixin",
-    "VillagerMixin"
+    "VillagerMixin",
+    "VillagerTradeMixin",
+    "FishingHookMixin",
+    "RidingMixin",
+    "LivingEntityDeathMixin",
+    "FarmlandTrampleMixin",
+    "AbstractVillagerMixin"
   ],
   "injectors": {
     "defaultRequire": 1

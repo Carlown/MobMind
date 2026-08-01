@@ -52,7 +52,7 @@ public final class SherpaLocal {
 				String text = r.getResult(stream).getText();
 				return LocalVoice.sanitizeTranscript(text);
 			} catch (Throwable t) {
-				MobMindMod.LOGGER.warn("[MobMind] JNI 识别失败: {}", t.getMessage());
+				MobMindMod.LOGGER.warn("[MobMind] JNI recognition failed: {}", t.getMessage());
 				return null;
 			}
 		}
@@ -95,12 +95,12 @@ public final class SherpaLocal {
 				recognizer = r;
 				loadedSttKey = key;
 				sttInitFailed = false;
-				MobMindMod.LOGGER.info("[MobMind] SenseVoice 模型已常驻加载 ({}ms)", System.currentTimeMillis() - t0);
+				MobMindMod.LOGGER.info("[MobMind] SenseVoice model resident loaded ({}ms)", System.currentTimeMillis() - t0);
 				return r;
 			} catch (Throwable t) {
 				sttInitFailed = true;
 				loadedSttKey = key;
-				MobMindMod.LOGGER.warn("[MobMind] JNI STT 初始化失败: {}", t.getMessage());
+				MobMindMod.LOGGER.warn("[MobMind] JNI STT initialization failed: {}", t.getMessage());
 				return null;
 			}
 		}
@@ -123,7 +123,7 @@ public final class SherpaLocal {
 			try {
 				return engine.generate(text, sid, (float) cfg.ttsSpeed);
 			} catch (Throwable t) {
-				MobMindMod.LOGGER.warn("[MobMind] JNI 合成失败: {}", t.getMessage());
+				MobMindMod.LOGGER.warn("[MobMind] JNI synthesis failed: {}", t.getMessage());
 				return null;
 			}
 		}
@@ -174,13 +174,13 @@ public final class SherpaLocal {
 				tts = engine;
 				loadedTtsKey = key;
 				ttsInitFailed = false;
-				MobMindMod.LOGGER.info("[MobMind] TTS 模型已常驻加载 ({}ms, {} 音色)",
-						System.currentTimeMillis() - t0, engine.getNumSpeakers());
+				MobMindMod.LOGGER.info("[MobMind] TTS model resident loaded ({}ms, {} voices)",
+					System.currentTimeMillis() - t0, engine.getNumSpeakers());
 				return engine;
 			} catch (Throwable t) {
 				ttsInitFailed = true;
 				loadedTtsKey = key;
-				MobMindMod.LOGGER.warn("[MobMind] JNI TTS 初始化失败: {}", t.getMessage());
+				MobMindMod.LOGGER.warn("[MobMind] JNI TTS initialization failed: {}", t.getMessage());
 				return null;
 			}
 		}

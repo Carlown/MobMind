@@ -5,7 +5,9 @@ import com.mobmind.behavior.BarterActions;
 import com.mobmind.behavior.BedGuard;
 import com.mobmind.behavior.FriendRecall;
 import com.mobmind.behavior.GiftActions;
+import com.mobmind.behavior.HouseGuard;
 import com.mobmind.behavior.TntFear;
+import com.mobmind.behavior.VillagerForage;
 import com.mobmind.behavior.WeaponAttackGoal;
 import com.mobmind.behavior.WeaponRangedAttackGoal;
 import com.mobmind.config.MobMindConfig;
@@ -63,14 +65,23 @@ public class MobMindMod implements ModInitializer {
 	private int greetCounter = 0;
 	private int barterCounter = 0;
 	private int bedCounter = 0;
+	private int houseGuardCounter = 0;
 	private int foodRequestCounter = 0;
 	private int autoEatCounter = 0;
+	private int villagerForageCounter = 0;
 	private int giftCounter = 0;
 	private int tntCounter = 0;
 	private int deathRecoveryCounter = 0;
 	private int pathBlockCounter = 0;
 	private int stuckCheckCounter = 0;
 	private int spontaneousGiftCounter = 0;
+	private int villagerGossipCounter = 0;
+	private int temptReactCounter = 0;
+	private int unleashCheckCounter = 0;
+	private int livestockTemptCounter = 0;
+	private int saddleCheckCounter = 0;
+	private int fireAlertCounter = 0;
+	private int floodAlertCounter = 0;
 	/** 生物被挡路累计tick数：mob uuid -> 连续被挡tick计数 */
 	private static final Map<UUID, Integer> BLOCKED_TICKS = new ConcurrentHashMap<>();
 	/** 生物卡住追踪：mob uuid -> [上次位置X, 上次位置Y, 上次位置Z, 连续不动tick数] */
@@ -116,7 +127,59 @@ public class MobMindMod implements ModInitializer {
 		// 右键有村民在睡的床 → 村民喝止
 		net.fabricmc.fabric.api.event.player.UseBlockCallback.EVENT.register((player, world, hand, hitResult) -> {
 			if (!world.isClientSide() && player instanceof net.minecraft.server.level.ServerPlayer sp) {
-				BedGuard.tryScoldOnClick(sp, world, hitResult.getBlockPos());
+				BlockPos pos = hitResult.getBlockPos();
+				BedGuard.tryScoldOnClick(sp, world, pos);
+				// 检测是否在村民家附近开容器
+				HouseGuard.onUseBlock(sp, (net.minecraft.server.level.ServerLevel) world, pos);
+				// 检测是否在猪灵附近开容器（开箱偷东西激怒猪灵）
+				HouseGuard.onUseBlockForPiglins(sp, (net.minecraft.server.level.ServerLevel) world, pos);
+			}
+			return InteractionResult.PASS;
+		});
+
+		// 玩家破坏方块 → 检测是否在村民家搞破坏 / 是否挖金块激怒猪灵
+		net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents.AFTER.register((world, player, pos, state, blockEntity) -> {
+			if (!world.isClientSide() && player instanceof net.minecraft.server.level.ServerPlayer sp) {
+				HouseGuard.onBlockBreak(sp, (net.minecraft.server.level.ServerLevel) world, pos, state);
+				HouseGuard.onBlockBreakForPiglins(sp, (net.minecraft.server.level.ServerLevel) world, pos, state);
+			}
+		});
+
+		// 记录玩家放置的方块（用于排除玩家自己种的菜/放的水/放的栅栏等被误判为村庄财产）
+		net.fabricmc.fabric.api.event.player.UseBlockCallback.EVENT.register((player, world, hand, hitResult) -> {
+			if (!world.isClientSide() && player instanceof net.minecraft.server.level.ServerPlayer sp) {
+				var stack = sp.getItemInHand(hand);
+				if (!stack.isEmpty()) {
+					// 只有方块物品或桶才能放置方块，其他物品（工具/食物等）使用方块时不应标记
+					boolean isBlockItem = stack.getItem() instanceof net.minecraft.world.item.BlockItem;
+					boolean isBucket = stack.getItem() instanceof net.minecraft.world.item.BucketItem
+							|| stack.getItem() instanceof net.minecraft.world.item.SolidBucketItem;
+					if (isBlockItem) {
+						var ctx = new net.minecraft.world.item.context.BlockPlaceContext(sp, hand, stack, hitResult);
+						var pos = ctx.getClickedPos();
+						if (pos != null) {
+							HouseGuard.markPlayerPlaced(pos);
+							// 玩家种植作物 → 村庄农民来感谢
+							if (stack.getItem() instanceof net.minecraft.world.item.BlockItem bi
+									&& com.mobmind.behavior.HouseGuard.isCropBlock(bi.getBlock().defaultBlockState())) {
+								MobAiService.onPlayerPlantCrop(sp, (net.minecraft.server.level.ServerLevel) world, pos);
+							}
+						}
+					}
+					if (isBucket) {
+						BlockPos fluidPos = hitResult.getBlockPos().relative(hitResult.getDirection());
+						HouseGuard.markPlayerPlaced(fluidPos);
+					}
+					// 锄头锄地 → 标记为玩家放置（区分村庄农田和玩家自建农田）
+					String itemId = net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(stack.getItem()).getPath();
+					if (itemId.endsWith("_hoe")) {
+						HouseGuard.markPlayerPlaced(hitResult.getBlockPos());
+					}
+					// 骨粉催熟作物 → 农民来感谢
+					if (itemId.equals("bone_meal")) {
+						MobAiService.onPlayerBoneMealCrop(sp, (net.minecraft.server.level.ServerLevel) world, hitResult.getBlockPos());
+					}
+				}
 			}
 			return InteractionResult.PASS;
 		});
@@ -131,6 +194,82 @@ public class MobMindMod implements ModInitializer {
 			if (stack.is(FRIEND_SELECTOR)) {
 				InteractionResult result = stack.interactLivingEntity(sp, mob, hand);
 				return result.consumesAction() ? result : InteractionResult.CONSUME;
+			}
+
+			// 归还流浪商人羊驼：玩家用拴绳或空手右键自己拴住的 trader_llama → 羊驼回到商人身边 + 商人道谢 + 商人拴住羊驼
+			if ((stack.is(net.minecraft.world.item.Items.LEAD) || stack.isEmpty())
+					&& mob.isLeashed() && mob.getLeashHolder() == sp) {
+				String entityId = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(mob.getType()).getPath();
+				if (entityId.equals("trader_llama") && MobAiService.onTraderLlamaReturned(mob, sp)) {
+					return InteractionResult.CONSUME;
+				}
+			}
+
+			// 拴绳检测：玩家用拴绳右键可拴生物 → 触发反应（不阻止原版行为）
+			if (stack.is(net.minecraft.world.item.Items.LEAD)
+					&& mob.canBeLeashed()
+					&& com.mobmind.persona.PersonaRegistry.supports(mob)) {
+				MobAiService.onPlayerLeashMob(mob, sp);
+				return InteractionResult.PASS; // 让原版处理实际拴绳
+			}
+			// 拴绳检测：玩家拴住被动动物（羊/猪/牛等）→ 村民质问
+			if (stack.is(net.minecraft.world.item.Items.LEAD)
+					&& mob.canBeLeashed()
+					&& !com.mobmind.persona.PersonaRegistry.supports(mob)) {
+				MobAiService.onPlayerLeashPassiveAnimal(mob, sp);
+				return InteractionResult.PASS;
+			}
+
+				// 剪羊毛检测：玩家用剪刀右键羊 → 触发村民反应（不阻止原版剪毛）
+			if (stack.is(net.minecraft.world.item.Items.SHEARS)
+					&& entity instanceof net.minecraft.world.entity.animal.sheep.Sheep sheep
+					&& !sheep.isSheared()) {
+				MobAiService.onSheepShearedByPlayer(sheep, sp, (net.minecraft.server.level.ServerLevel) world);
+				return InteractionResult.PASS;
+			}
+
+			// 鞍/马铠/诡异菌检测：对马类、炽足兽装备骑乘物品时触发AI反应
+			if (com.mobmind.persona.PersonaRegistry.supports(mob) && !stack.isEmpty()) {
+				String itemId = net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(stack.getItem()).getPath();
+				boolean isSaddle = itemId.equals("saddle");
+				boolean isHorseArmor = itemId.contains("horse_armor");
+				boolean isWarpedFungus = itemId.equals("warped_fungus") || itemId.equals("warped_fungus_on_a_stick");
+
+				if (isSaddle || isHorseArmor || isWarpedFungus) {
+					// 判断生物类型
+					String entityId = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE
+							.getKey(mob.getType()).getPath();
+					boolean isSkeletonHorse = entityId.equals("skeleton_horse"); // 不需要驯服
+					boolean isZombieHorse = entityId.equals("zombie_horse");     // 需要手动驯服
+					boolean isStrider = entityId.equals("strider");              // 不需要驯服
+					if (isSkeletonHorse || isZombieHorse || isStrider) {
+						// 僵尸马需要驯服才装鞍/马铠，骷髅马和炽足兽不需要
+						boolean tamed = true;
+						if (isZombieHorse && mob instanceof net.minecraft.world.entity.animal.equine.AbstractHorse ah) {
+							tamed = ah.isTamed();
+						}
+						String itemType = isSaddle ? "saddle" : (isHorseArmor ? "armor" : "fungus");
+						MobAiService.onRidingEquipmentApplied(mob, sp, itemType, tamed);
+						return InteractionResult.PASS;
+					}
+				}
+			}
+
+			// 刷怪蛋检测：玩家手持刷怪蛋右键模组支持的生物 → 触发反应（不阻止原版生成）
+			// 同类刷怪蛋（如村民蛋右键村民）→ "你想复制我？"
+			// 异类刷怪蛋（如牛蛋右键村民）→ "你想造什么？这跟我不是同类"
+			if (com.mobmind.persona.PersonaRegistry.supports(mob) && !stack.isEmpty()
+					&& stack.getItem() instanceof net.minecraft.world.item.SpawnEggItem) {
+				var eggType = net.minecraft.world.item.SpawnEggItem.getType(stack);
+				var mobType = mob.getType();
+				boolean isSameType = eggType != null && eggType.equals(mobType);
+				String eggEntityId = "unknown";
+				if (eggType != null) {
+					var eggKey = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(eggType);
+					if (eggKey != null) eggEntityId = eggKey.getPath();
+				}
+				MobAiService.onSpawnEggUsed(mob, sp, isSameType, eggEntityId);
+				return InteractionResult.PASS; // 让原版处理实际生成
 			}
 
 			// 铜傀儡除锈/上蜡（仅在未蹲下时触发，蹲下+斧可作为武器赠送）
@@ -436,6 +575,10 @@ public class MobMindMod implements ModInitializer {
 				bedCounter = 0;
 				BedGuard.tick(server);
 			}
+			if (++houseGuardCounter >= 100) { // 每5秒清理/衰减作案计数
+				houseGuardCounter = 0;
+				HouseGuard.tick(server);
+			}
 			if (++foodRequestCounter >= 200) { // 每10秒检查一次低血量友好生物要食物
 				foodRequestCounter = 0;
 				MobAiService.tryFoodRequest(server);
@@ -443,6 +586,10 @@ public class MobMindMod implements ModInitializer {
 			if (++autoEatCounter >= 60) { // 每3秒检查一次低血量自动吃存储食物
 				autoEatCounter = 0;
 				MobAiService.tickAutoEatFood(server);
+			}
+			if (++villagerForageCounter >= 60) { // 每3秒检查一次村民低血量觅食（箱子/干草捆/作物/牲畜）
+				villagerForageCounter = 0;
+				VillagerForage.tick(server);
 			}
 			if (++giftCounter >= 10) { // 每0.5秒检查玩家扔给友好生物的礼物
 				giftCounter = 0;
@@ -468,9 +615,37 @@ public class MobMindMod implements ModInitializer {
 				spontaneousGiftCounter = 0;
 				tickSpontaneousGifts(server);
 			}
+			if (++villagerGossipCounter >= 600) { // 每30秒检查一次村民小声议论
+				villagerGossipCounter = 0;
+				MobAiService.tryVillagerGossip(server);
+			}
+			if (++temptReactCounter >= 40) { // 每2秒检查一次手持物品吸引
+				temptReactCounter = 0;
+				MobAiService.tryTemptReact(server);
+			}
+			if (++unleashCheckCounter >= 20) { // 每1秒检查一次拴绳解开
+				unleashCheckCounter = 0;
+				MobAiService.checkUnleashEvents(server);
+			}
+			if (++livestockTemptCounter >= 60) { // 每3秒检查一次吸引动物
+				livestockTemptCounter = 0;
+				MobAiService.tryLivestockTemptInVillage(server);
+			}
+			if (++saddleCheckCounter >= 20) { // 每1秒检查一次马鞍移除
+				saddleCheckCounter = 0;
+				MobAiService.checkSaddleRemoved(server);
+			}
+			if (++fireAlertCounter >= 40) { // 每2秒检查一次村民火灾呼救
+				fireAlertCounter = 0;
+				MobAiService.tryHouseFireAlert(server);
+			}
+			if (++floodAlertCounter >= 40) { // 每2秒检查一次水冲作物
+				floodAlertCounter = 0;
+				MobAiService.tryCropFloodAlert(server);
+			}
 		});
 
-		LOGGER.info("[MobMind] 生物AI智慧系统已初始化");
+		LOGGER.info("[MobMind] Mob AI intelligence system initialized");
 	}
 
 	/** 检测玩家是否挡在生物去路上，大幅提高触发门槛，必须真的被挡住很久才提示 */

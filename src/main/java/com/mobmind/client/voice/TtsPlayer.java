@@ -38,7 +38,7 @@ public final class TtsPlayer {
 					}
 				}
 			} catch (Exception e) {
-				MobMindMod.LOGGER.warn("[MobMind] 语音播放失败: {}", e.getMessage());
+				MobMindMod.LOGGER.warn("[MobMind] Voice playback failed: {}", e.getMessage());
 			}
 		});
 	}
@@ -50,7 +50,7 @@ public final class TtsPlayer {
 				byte[] bytes = java.nio.file.Files.readAllBytes(wavFile);
 				play(bytes);
 			} catch (Exception e) {
-				MobMindMod.LOGGER.warn("[MobMind] 语音文件读取失败: {}", e.getMessage());
+				MobMindMod.LOGGER.warn("[MobMind] Failed to read voice file: {}", e.getMessage());
 			} finally {
 				try {
 					java.nio.file.Files.deleteIfExists(wavFile);
@@ -78,7 +78,7 @@ public final class TtsPlayer {
 					line.drain();
 				}
 			} catch (Exception e) {
-				MobMindMod.LOGGER.warn("[MobMind] 语音播放失败: {}", e.getMessage());
+				MobMindMod.LOGGER.warn("[MobMind] Voice playback failed: {}", e.getMessage());
 			}
 		});
 	}

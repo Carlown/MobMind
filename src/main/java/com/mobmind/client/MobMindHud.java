@@ -136,11 +136,7 @@ public class MobMindHud implements HudElement {
 			String moodStr = translateMood(ex.mood());
 			String mood = moodStr.isEmpty() ? "" : " §8[" + moodStr + "]";
 			graphics.text(mc.font, Component.literal("§e" + ex.mobName() + "§r: " + ex.replyText() + mood), 8, y, 0xFFFFFFFF);
-			// 好感度为隐藏机制，不展示给玩家
-			if (!"none".equals(ex.action())) {
-				String action = Component.translatable("hud.mobmind.action").getString();
-				graphics.text(mc.font, Component.literal("§7" + action + ": " + ex.action()), 8, y + 11, 0xFFFFFFFF);
-			}
+			// 好感度和动作都是隐藏内部机制，不展示给玩家
 		}
 	}
 }

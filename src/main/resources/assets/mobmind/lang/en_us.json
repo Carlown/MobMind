@@ -7,11 +7,13 @@
   "key.mobmind.config": "MobMind: Settings (Ctrl+K)",
 
   "gui.mobmind.config.title": "MobMind Settings",
-  "gui.mobmind.config.section.api": "Cloud API (Chat / Fallback Voice)",
+  "gui.mobmind.config.section.api": "LLM API (Local Ollama / Cloud)",
   "gui.mobmind.config.section.local": "Local Voice Engine sherpa-onnx",
   "gui.mobmind.config.section.behavior": "Behavior Settings",
   "gui.mobmind.config.label.apiEndpoint": "API Endpoint",
+  "gui.mobmind.config.hint.apiEndpoint": "Local Ollama: http://127.0.0.1:11434/v1",
   "gui.mobmind.config.label.apiKey": "API Key",
+  "gui.mobmind.config.hint.apiKey": "Leave empty for local Ollama",
   "gui.mobmind.config.label.chatModel": "Chat Model",
   "gui.mobmind.config.label.temperature": "Temperature (0-2)",
   "gui.mobmind.config.label.maxTokens": "Max Tokens",
@@ -81,5 +83,9 @@
   "item.mobmind.friend_selector.not_friendly": "§cThis mob is not your friend yet",
   "item.mobmind.friend_selector.selected": "§aSelected %s (%s total)",
   "item.mobmind.friend_selector.deselected": "§eDeselected %s",
-  "item.mobmind.friend_selector.full": "§cMax %s friends can be selected"
+  "item.mobmind.friend_selector.full": "§cMax %s friends can be selected",
+
+  "gui.mobmind.talk.title": "Talk to %s",
+  "gui.mobmind.talk.input": "Message",
+  "gui.mobmind.talk.hint": "Type what you want to say, press Enter to send…"
 }

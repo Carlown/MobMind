@@ -4,13 +4,19 @@
   "version": "${version}",
   "name": "MobMind - 生物心智",
   "description": "为 Minecraft 生物赋予独立 AI 人格：语音对话、好感度、行为影响。",
-  "authors": ["MobMind"],
+  "authors": ["accour"],
+  "contact": {
+    "homepage": "https://www.curseforge.com/minecraft/mc-mods/mobmind",
+    "issues": "https://github.com/Carlown/MobMind/issues",
+    "sources": "https://github.com/Carlown/MobMind"
+  },
   "license": "MIT",
   "icon": "assets/mobmind/icon.png",
   "environment": "*",
   "entrypoints": {
     "main": ["com.mobmind.MobMindMod"],
-    "client": ["com.mobmind.client.MobMindClient"]
+    "client": ["com.mobmind.client.MobMindClient"],
+    "modmenu": ["com.mobmind.client.ModMenuIntegration"]
   },
   "mixins": ["mobmind.mixins.json"],
   "depends": {
@@ -18,5 +24,8 @@
     "minecraft": "~26.2",
     "java": ">=25",
     "fabric-api": "*"
+  },
+  "suggests": {
+    "modmenu": "*"
   }
 }

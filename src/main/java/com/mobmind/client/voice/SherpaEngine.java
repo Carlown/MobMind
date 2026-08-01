@@ -106,7 +106,7 @@ public final class SherpaEngine {
 
 		ProcessResult r = run(cmd);
 		if (r.exitCode != 0 || !Files.isRegularFile(out)) {
-			MobMindMod.LOGGER.warn("[MobMind] TTS 合成失败(exit={}): {}", r.exitCode, tail(r.stderr));
+			MobMindMod.LOGGER.warn("[MobMind] TTS synthesis failed (exit={}): {}", r.exitCode, tail(r.stderr));
 			return null;
 		}
 		return out;

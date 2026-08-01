@@ -73,8 +73,8 @@ public abstract class MobTransformationMixin {
 			if (healerId != null) {
 				int curFriendship = MobMindState.friendship(newMob, healerId);
 				MobMindState.setFriendship(newId, healerId, Math.max(curFriendship, 80));
-				com.mobmind.MobMindMod.LOGGER.info("[MobMind] 僵尸村民治愈完成: {} 被治愈，对治愈者好感度设为{}",
-						newMob.getType().getDescription().getString(), Math.max(curFriendship, 80));
+				com.mobmind.MobMindMod.LOGGER.info("[MobMind] Zombie villager cured: {} cured, healer friendship set to {}",
+					newMob.getType().getDescription().getString(), Math.max(curFriendship, 80));
 			}
 			MobMindState.onZombieVillagerCured(newMob);
 		}

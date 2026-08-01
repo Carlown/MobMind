@@ -7,11 +7,13 @@
   "key.mobmind.config": "MobMind：设置界面（Ctrl+K）",
 
   "gui.mobmind.config.title": "MobMind 设置",
-  "gui.mobmind.config.section.api": "云端 API（聊天 / 备用语音）",
+  "gui.mobmind.config.section.api": "大模型 API（支持本地 Ollama / 云端）",
   "gui.mobmind.config.section.local": "本地语音引擎 sherpa-onnx",
   "gui.mobmind.config.section.behavior": "行为设置",
   "gui.mobmind.config.label.apiEndpoint": "API 端点",
+  "gui.mobmind.config.hint.apiEndpoint": "本地Ollama: http://127.0.0.1:11434/v1",
   "gui.mobmind.config.label.apiKey": "访问密钥",
+  "gui.mobmind.config.hint.apiKey": "本地Ollama留空，云端API需填写",
   "gui.mobmind.config.label.chatModel": "聊天模型",
   "gui.mobmind.config.label.temperature": "温度(0-2)",
   "gui.mobmind.config.label.maxTokens": "最大Token",
@@ -81,5 +83,9 @@
   "item.mobmind.friend_selector.not_friendly": "§c这个生物还不是你的朋友",
   "item.mobmind.friend_selector.selected": "§a已选中 %s（共 %s 个）",
   "item.mobmind.friend_selector.deselected": "§e已取消选中 %s",
-  "item.mobmind.friend_selector.full": "§c最多只能选中 %s 个朋友"
+  "item.mobmind.friend_selector.full": "§c最多只能选中 %s 个朋友",
+
+  "gui.mobmind.talk.title": "与 %s 对话",
+  "gui.mobmind.talk.input": "对话内容",
+  "gui.mobmind.talk.hint": "输入想说的话，回车发送…"
 }
